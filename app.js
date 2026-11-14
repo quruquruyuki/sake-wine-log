@@ -7,7 +7,7 @@ const BUCKET = "labels";
 
 let user = null;
 let drinks = [];
-let photoUrls = {};          // photo_path -> signed URL
+let photoUrls = {};          // 保存先パス -> 表示用URL
 let filterKind = "all";
 let editing = null;          // 編集中のレコード（新規は null）
 let current = null;          // 詳細表示中のレコード
@@ -39,8 +39,8 @@ function intOrNull(v) { const n = parseInt(String(v ?? "").replace(/[^\d]/g, "")
 function uid() { return crypto.randomUUID ? crypto.randomUUID() : ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, c => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)); }
 function strOrNull(v) { const s = String(v ?? "").trim(); return s ? s : null; }
 
-// 写真を長辺1280pxのJPEGに縮小
-async function shrink(file) {
+// 写真を長辺 max px のJPEGに縮小（保存用 1024px、一覧用サムネイル 360px）
+async function shrink(file, max = 1024, quality = 0.8) {
   const bmp = await createImageBitmap(file, { imageOrientation: "from-image" }).catch(() => null);
   let w, h, draw;
   if (bmp) { w = bmp.width; h = bmp.height; draw = ctx => ctx.drawImage(bmp, 0, 0, cw, ch); }
@@ -48,14 +48,69 @@ async function shrink(file) {
     const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = URL.createObjectURL(file); });
     w = img.naturalWidth; h = img.naturalHeight; draw = ctx => ctx.drawImage(img, 0, 0, cw, ch);
   }
-  const s = Math.min(1, 1280 / Math.max(w, h));
+  const s = Math.min(1, max / Math.max(w, h));
   var cw = Math.round(w * s), ch = Math.round(h * s);
   const c = document.createElement("canvas"); c.width = cw; c.height = ch;
   draw(c.getContext("2d"));
-  return await new Promise(r => c.toBlob(r, "image/jpeg", 0.85));
+  return await new Promise(r => c.toBlob(r, "image/jpeg", quality));
 }
 function blobToBase64(blob) {
   return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1]); r.onerror = rej; r.readAsDataURL(blob); });
+}
+
+/* ---------- photo URLs ---------- */
+// 表示用URLは7日有効。端末に覚えておき、同じURLを使い回すことでブラウザのキャッシュが効く（通信量の節約）
+const URL_KEY = "swl-urls";
+const URL_TTL = 60 * 60 * 24 * 7;
+function urlCache() { try { return JSON.parse(localStorage.getItem(URL_KEY) || "{}"); } catch { return {}; } }
+function saveUrlCache(c) { try { localStorage.setItem(URL_KEY, JSON.stringify(c)); } catch {} }
+async function ensureUrls(paths) {
+  const now = Date.now(), cache = urlCache(), need = [];
+  for (const p of new Set(paths.filter(Boolean))) {
+    if (photoUrls[p]) continue;
+    const c = cache[p];
+    if (c && c.e > now + 864e5) photoUrls[p] = c.u; else need.push(p);
+  }
+  if (need.length) {
+    const { data } = await sb.storage.from(BUCKET).createSignedUrls(need, URL_TTL);
+    (data || []).forEach(u => { if (u.signedUrl) { photoUrls[u.path] = u.signedUrl; cache[u.path] = { u: u.signedUrl, e: now + URL_TTL * 1000 }; } });
+    for (const k of Object.keys(cache)) if (cache[k].e < now) delete cache[k];
+    saveUrlCache(cache);
+  }
+}
+const thumbOf = d => d.thumb_path || d.photo_path;
+
+async function uploadPhoto(blob) {
+  const id = uid();
+  const path = `${user.id}/${id}.jpg`, thumb = `${user.id}/${id}_t.jpg`;
+  const tblob = await shrink(blob, 360, 0.72);
+  const opt = { contentType: "image/jpeg", cacheControl: "604800" };
+  const [a, b] = await Promise.all([sb.storage.from(BUCKET).upload(path, blob, opt), sb.storage.from(BUCKET).upload(thumb, tblob, opt)]);
+  if (a.error) throw a.error;
+  if (b.error) throw b.error;
+  photoUrls[path] = URL.createObjectURL(blob); photoUrls[thumb] = URL.createObjectURL(tblob);
+  return { photo_path: path, thumb_path: thumb };
+}
+function removePhotos(d) { const ps = [d.photo_path, d.thumb_path].filter(Boolean); if (ps.length) sb.storage.from(BUCKET).remove(ps); }
+
+// サムネイルがない古い記録に、あとからサムネイルを作る
+let backfilling = false;
+async function backfillThumbs() {
+  if (backfilling) return; backfilling = true;
+  try {
+    for (const d of drinks.filter(x => x.photo_path && !x.thumb_path)) {
+      await ensureUrls([d.photo_path]);
+      const blob = await fetch(photoUrls[d.photo_path]).then(r => r.ok ? r.blob() : null).catch(() => null);
+      if (!blob) continue;
+      const tblob = await shrink(blob, 360, 0.72);
+      const thumb = d.photo_path.replace(/\.jpg$/, "") + "_t.jpg";
+      const { error } = await sb.storage.from(BUCKET).upload(thumb, tblob, { contentType: "image/jpeg", cacheControl: "604800", upsert: true });
+      if (error) continue;
+      const { error: e2 } = await sb.from("drinks").update({ thumb_path: thumb }).eq("id", d.id);
+      if (!e2) { d.thumb_path = thumb; photoUrls[thumb] = URL.createObjectURL(tblob); }
+    }
+    renderList();
+  } finally { backfilling = false; }
 }
 
 /* ---------- data ---------- */
@@ -63,13 +118,10 @@ async function load() {
   const { data, error } = await sb.from("drinks").select("*").order("drank_on", { ascending: false }).order("created_at", { ascending: false });
   if (error) { toast("読み込みに失敗しました"); console.error(error); return; }
   drinks = data;
-  const paths = drinks.map(d => d.photo_path).filter(p => p && !photoUrls[p]);
-  if (paths.length) {
-    const { data: urls } = await sb.storage.from(BUCKET).createSignedUrls(paths, 60 * 60 * 6);
-    (urls || []).forEach(u => { if (u.signedUrl) photoUrls[u.path] = u.signedUrl; });
-  }
+  await ensureUrls(drinks.map(thumbOf));
   renderList();
   fillShops();
+  backfillThumbs();
 }
 
 function fillShops() {
@@ -98,7 +150,7 @@ function renderList() {
   $("count").textContent = drinks.length ? `${rows.length} 本` : "";
   $("empty").classList.toggle("hidden", drinks.length > 0);
   $("grid").innerHTML = rows.map(d => {
-    const url = d.photo_path && photoUrls[d.photo_path];
+    const url = thumbOf(d) && photoUrls[thumbOf(d)];
     const sub = subline(d, true);
     return `<button class="item" data-id="${d.id}" type="button">
       <div class="thumb" style="${url ? `background-image:url('${url}')` : ""}">
@@ -198,8 +250,9 @@ function openAdd() {
   F().drank_on.value = today();
   $("edit").classList.remove("hidden"); $("edit").scrollTop = 0;
 }
-function openEdit(d) {
+async function openEdit(d) {
   editing = d; resetEdit();
+  if (d.photo_path) await ensureUrls([d.photo_path]);
   $("editTitle").textContent = "編集";
   fillForm(d);
   const url = d.photo_path && photoUrls[d.photo_path];
@@ -218,7 +271,7 @@ $("reRead").onclick = () => readLabel();
 
 $("photo").onchange = async e => {
   const file = e.target.files[0]; if (!file) return;
-  try { photoBlob = await shrink(file); } catch { toast("写真を読み込めませんでした"); return; }
+  try { photoBlob = await shrink(file, 1024, 0.8); } catch { toast("写真を読み込めませんでした"); return; }
   $("preview").src = URL.createObjectURL(photoBlob);
   $("shotBox").classList.add("hidden"); $("photoWrap").classList.remove("hidden");
   if (editing) { showForm(); $("reRead").classList.remove("hidden"); return; } // 編集中は写真の差し替えだけ
@@ -350,18 +403,12 @@ $("saveBtn").onclick = async () => {
       sources: state.sources?.length ? state.sources : null,
     };
     if (aiRaw) row.ai_raw = aiRaw;
-    if (photoBlob) {
-      const path = `${user.id}/${uid()}.jpg`;
-      const { error } = await sb.storage.from(BUCKET).upload(path, photoBlob, { contentType: "image/jpeg" });
-      if (error) throw error;
-      row.photo_path = path;
-      photoUrls[path] = URL.createObjectURL(photoBlob);
-    }
+    if (photoBlob) Object.assign(row, await uploadPhoto(photoBlob));
     let saved;
     if (editing) {
       const { data, error } = await sb.from("drinks").update(row).eq("id", editing.id).select().single();
       if (error) throw error;
-      if (photoBlob && editing.photo_path) sb.storage.from(BUCKET).remove([editing.photo_path]);
+      if (photoBlob) removePhotos(editing);
       saved = data;
     } else {
       const { data, error } = await sb.from("drinks").insert(row).select().single();
@@ -383,7 +430,12 @@ $("saveBtn").onclick = async () => {
 function openDetail(d) {
   if (!d) return;
   current = d;
-  const url = d.photo_path && photoUrls[d.photo_path];
+  // まずサムネイルを出し、大きい写真は読み込めたら差し替える
+  const url = (d.photo_path && photoUrls[d.photo_path]) || (thumbOf(d) && photoUrls[thumbOf(d)]);
+  if (d.photo_path && !photoUrls[d.photo_path]) ensureUrls([d.photo_path]).then(() => {
+    const img = document.querySelector("#detailBody .dhero");
+    if (current === d && img && photoUrls[d.photo_path]) img.src = photoUrls[d.photo_path];
+  });
   const scaleTxt = (n, l, r) => n ? `${l} ${"●".repeat(n)}${"○".repeat(5 - n)} ${r}` : null;
   const L = LABELS[d.kind] || LABELS.wine;
   const place = ["産地", [d.country, d.region].filter(Boolean).join(" / ")];
@@ -418,7 +470,7 @@ $("detailDelete").onclick = async () => {
   if (!current || !confirm(`「${current.name}」の記録を削除します。元に戻せません。`)) return;
   const { error } = await sb.from("drinks").delete().eq("id", current.id);
   if (error) { toast("削除に失敗しました"); return; }
-  if (current.photo_path) sb.storage.from(BUCKET).remove([current.photo_path]);
+  removePhotos(current);
   $("detail").classList.add("hidden");
   toast("削除しました");
   load();
