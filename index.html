@@ -17,7 +17,7 @@
 <style>
 :root{
   --paper:#f4efe7;--card:#fbf8f3;--ink:#1f1b17;--mu:#857c71;--line:#e2d9cc;
-  --wine:#7b2233;--sake:#2d4a6b;--gold:#a9802f;
+  --wine:#7b2233;--sake:#2d4a6b;--shochu:#6b5332;--beer:#b07a1a;--gold:#a9802f;
   --serif:"Shippori Mincho","Hiragino Mincho ProN",serif;
   --latin:"Cormorant Garamond",Georgia,serif;
 }
@@ -37,7 +37,7 @@ main{max-width:640px;margin:0 auto;padding:calc(env(safe-area-inset-top) + 18px)
 /* filters */
 .filters{display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap}
 .seg{display:inline-flex;border:1px solid var(--line);border-radius:999px;padding:3px;background:var(--card)}
-.seg button{border:none;background:none;padding:7px 14px;border-radius:999px;font-size:13px;color:var(--mu)}
+.seg button{border:none;background:none;padding:7px 11px;border-radius:999px;font-size:13px;color:var(--mu)}
 .seg button.on{background:var(--ink);color:var(--paper)}
 select.sort{border:1px solid var(--line);background:var(--card);border-radius:999px;padding:8px 12px;font-size:13px;appearance:none;-webkit-appearance:none;color:var(--mu)}
 .search{width:100%;border:1px solid var(--line);background:var(--card);border-radius:12px;padding:11px 14px;font-size:15px;margin-bottom:16px}
@@ -51,6 +51,8 @@ select.sort{border:1px solid var(--line);background:var(--card);border-radius:99
 .thumb .ph{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-family:var(--serif);font-size:34px;color:#c9bca9}
 .tag{position:absolute;left:8px;top:8px;font-size:10px;letter-spacing:.12em;padding:3px 7px;border-radius:4px;color:#fff;background:var(--wine)}
 .tag.sake{background:var(--sake)}
+.tag.shochu{background:var(--shochu)}
+.tag.beer{background:var(--beer)}
 .again{position:absolute;right:8px;top:8px;font-size:10px;padding:3px 7px;border-radius:4px;background:rgba(255,255,255,.9);color:var(--gold)}
 .item h3{font-family:var(--serif);font-size:14px;font-weight:700;line-height:1.4;margin:8px 0 2px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .item p{margin:0;font-size:11px;color:var(--mu);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -91,14 +93,16 @@ select.sort{border:1px solid var(--line);background:var(--card);border-radius:99
 .chips{display:flex;flex-wrap:wrap;gap:6px}
 .chips button{border:1px solid var(--line);background:var(--card);border-radius:999px;padding:8px 13px;font-size:13px}
 .chips button.on{background:var(--ink);border-color:var(--ink);color:var(--paper)}
-.kindsw{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:14px}
-.kindsw button{border:1px solid var(--line);background:var(--card);border-radius:12px;padding:12px;font-family:var(--serif);font-size:16px}
+.kindsw{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:14px}
+.kindsw button{border:1px solid var(--line);background:var(--card);border-radius:12px;padding:12px 4px;font-family:var(--serif);font-size:15px}
 .kindsw button.on.wine{background:var(--wine);border-color:var(--wine);color:#fff}
 .kindsw button.on.sake{background:var(--sake);border-color:var(--sake);color:#fff}
+.kindsw button.on.shochu{background:var(--shochu);border-color:var(--shochu);color:#fff}
+.kindsw button.on.beer{background:var(--beer);border-color:var(--beer);color:#fff}
 .scale{display:flex;align-items:center;gap:8px;margin-top:6px}
-.scale small{font-size:11px;color:var(--mu);flex:0 0 3.2em;text-align:center}
+.scale small{font-size:11px;color:var(--mu);flex:0 0 4.4em;text-align:center;white-space:nowrap}
 .scale .dots{flex:1;display:flex;justify-content:space-between}
-.scale .dots button{width:34px;height:34px;border-radius:50%;border:1px solid var(--line);background:var(--card)}
+.scale .dots button{width:32px;height:32px;border-radius:50%;border:1px solid var(--line);background:var(--card)}
 .scale .dots button.on{background:var(--ink);border-color:var(--ink)}
 .rate{display:flex;gap:4px}
 .rate button{border:none;background:none;font-size:30px;color:#d8ccb9;padding:0 2px;line-height:1}
@@ -116,6 +120,8 @@ select.sort{border:1px solid var(--line);background:var(--card);border-radius:99
 .dhero{width:100%;aspect-ratio:3/4;max-height:60vh;object-fit:cover;border-radius:14px;background:#e9e1d5;display:block}
 .dkind{display:inline-block;margin-top:16px;font-size:11px;letter-spacing:.15em;color:#fff;background:var(--wine);padding:3px 8px;border-radius:4px}
 .dkind.sake{background:var(--sake)}
+.dkind.shochu{background:var(--shochu)}
+.dkind.beer{background:var(--beer)}
 .dname{font-family:var(--serif);font-weight:700;font-size:24px;line-height:1.4;margin:8px 0 2px}
 .dsub{color:var(--mu);font-size:13px;margin:0}
 .drate{color:var(--gold);font-size:20px;letter-spacing:2px;margin:10px 0 0}
@@ -132,6 +138,13 @@ select.sort{border:1px solid var(--line);background:var(--card);border-radius:99
 #auth input{width:100%;border:1px solid var(--line);background:var(--card);border-radius:12px;padding:13px 14px;font-size:16px;margin-top:10px}
 #auth .btn{margin-top:16px}
 .linkbtn{border:none;background:none;color:var(--mu);font-size:13px;margin-top:14px;text-decoration:underline;width:100%}
+.webbtn{display:flex;flex-direction:column;align-items:center;width:100%;margin-top:16px;border:1px solid var(--sake);color:var(--sake);background:none;border-radius:12px;padding:12px;font-size:15px}
+.webbtn small{font-size:11px;color:var(--mu);margin-top:2px}
+.webbtn:disabled{opacity:.45}
+.srcs{margin-top:10px;font-size:12px;line-height:1.7}
+.srcs b{display:block;color:var(--mu);font-weight:600;font-size:11px;letter-spacing:.1em}
+.srcs a{color:var(--sake);word-break:break-all;display:block}
+.ddesc{margin-top:14px;font-size:14px;line-height:1.8;color:#3d362f}
 .toast{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom) + 90px);transform:translateX(-50%);background:var(--ink);color:var(--paper);padding:10px 18px;border-radius:999px;font-size:13px;z-index:50;opacity:0;transition:opacity .2s;pointer-events:none}
 .toast.on{opacity:1}
 </style>
@@ -141,7 +154,7 @@ select.sort{border:1px solid var(--line);background:var(--card);border-radius:99
 <section id="auth" class="hidden">
   <h1>酒ログ</h1>
   <p class="latin">a little cellar of memories</p>
-  <p id="authMsg">ワインと日本酒の記録を保存するため、メールアドレスとパスワードでログインします。</p>
+  <p id="authMsg">お酒の記録を保存するため、メールアドレスとパスワードでログインします。</p>
   <form id="authForm">
     <input id="email" type="email" autocomplete="email" placeholder="メールアドレス" required>
     <input id="password" type="password" autocomplete="current-password" placeholder="パスワード（6文字以上）" minlength="6" required>
@@ -160,6 +173,8 @@ select.sort{border:1px solid var(--line);background:var(--card);border-radius:99
       <button data-k="all" class="on" type="button">すべて</button>
       <button data-k="wine" type="button">ワイン</button>
       <button data-k="sake" type="button">日本酒</button>
+      <button data-k="shochu" type="button">焼酎</button>
+      <button data-k="beer" type="button">ビール</button>
     </div>
     <select class="sort" id="sort">
       <option value="date">新しい順</option>
@@ -199,6 +214,8 @@ select.sort{border:1px solid var(--line);background:var(--card);border-radius:99
       <div class="kindsw">
         <button type="button" data-kind="wine" class="wine">ワイン</button>
         <button type="button" data-kind="sake" class="sake">日本酒</button>
+        <button type="button" data-kind="shochu" class="shochu">焼酎</button>
+        <button type="button" data-kind="beer" class="beer">ビール</button>
       </div>
 
       <div class="sec"><h4>銘柄<em id="aiMark" class="hidden">● AIが入力</em></h4>
@@ -227,16 +244,60 @@ select.sort{border:1px solid var(--line);background:var(--card);border-radius:99
             <label class="f"><span>酒米</span><input name="rice"></label>
           </div>
         </div>
+        <div class="only-shochu">
+          <span class="f"><span>原料</span></span>
+          <div class="chips" data-chips="ingredient">
+            <button type="button" data-v="芋">芋</button><button type="button" data-v="麦">麦</button><button type="button" data-v="米">米</button>
+            <button type="button" data-v="黒糖">黒糖</button><button type="button" data-v="そば">そば</button><button type="button" data-v="泡盛">泡盛</button><button type="button" data-v="その他">その他</button>
+          </div>
+          <div class="row">
+            <label class="f"><span>麹</span><input name="koji" list="kojis" placeholder="黒麹など"></label>
+            <label class="f"><span>度数（%）</span><input name="abv" inputmode="decimal" placeholder="25"></label>
+          </div>
+          <datalist id="kojis"><option>黒麹</option><option>白麹</option><option>黄麹</option></datalist>
+          <span class="f"><span>蒸留</span></span>
+          <div class="chips" data-chips="distillation">
+            <button type="button" data-v="常圧">常圧</button><button type="button" data-v="減圧">減圧</button>
+          </div>
+        </div>
+        <div class="only-beer">
+          <div class="row">
+            <label class="f"><span>スタイル</span><input name="beer_style" list="styles" placeholder="IPAなど"></label>
+            <label class="f"><span>度数（%）</span><input name="abv_beer" inputmode="decimal" placeholder="5"></label>
+          </div>
+          <datalist id="styles"><option>ピルスナー</option><option>ラガー</option><option>ペールエール</option><option>IPA</option><option>ヘイジーIPA</option><option>ヴァイツェン</option><option>ホワイトエール</option><option>セゾン</option><option>スタウト</option><option>ポーター</option><option>サワー</option><option>フルーツビール</option></datalist>
+        </div>
       </div>
 
+      <button class="webbtn" id="webBtn" type="button">ネットで詳しく調べる<small>1回 約2〜3円・20秒ほど</small></button>
+      <div class="reading hidden" id="webReading"><div class="spin"></div>ネットで調べています…（20秒ほどかかります）</div>
+      <div class="note hidden" id="webNote"></div>
+      <label class="f hidden" id="descWrap"><span>特徴（ネットで調べた要約）</span><textarea name="description" style="min-height:80px"></textarea></label>
+      <div class="srcs hidden" id="srcList"></div>
+
       <div class="sec"><h4>味わい</h4>
-        <div class="scale" data-scale="sweetness"><small>辛口</small><div class="dots"></div><small>甘口</small></div>
+        <div class="scale" data-scale="bitterness"><small>苦味弱</small><div class="dots"></div><small>苦味強</small></div>
+        <div class="scale" data-scale="sweetness"><small id="sweetL">辛口</small><div class="dots"></div><small id="sweetR">甘口</small></div>
         <div class="scale" data-scale="body"><small id="bodyL">軽い</small><div class="dots"></div><small id="bodyR">重い</small></div>
         <div class="only-sake">
           <span class="f"><span>飲んだ温度</span></span>
           <div class="chips" data-chips="serve_temp">
             <button type="button" data-v="冷酒">冷酒</button><button type="button" data-v="常温">常温</button>
             <button type="button" data-v="ぬる燗">ぬる燗</button><button type="button" data-v="熱燗">熱燗</button>
+          </div>
+        </div>
+        <div class="only-shochu">
+          <span class="f"><span>飲み方</span></span>
+          <div class="chips" data-chips="serve_temp">
+            <button type="button" data-v="ストレート">ストレート</button><button type="button" data-v="ロック">ロック</button>
+            <button type="button" data-v="水割り">水割り</button><button type="button" data-v="お湯割り">お湯割り</button>
+            <button type="button" data-v="ソーダ割り">ソーダ割り</button><button type="button" data-v="前割り">前割り</button>
+          </div>
+        </div>
+        <div class="only-beer">
+          <span class="f"><span>飲んだ形</span></span>
+          <div class="chips" data-chips="serve_temp">
+            <button type="button" data-v="樽生">樽生</button><button type="button" data-v="瓶">瓶</button><button type="button" data-v="缶">缶</button>
           </div>
         </div>
       </div>

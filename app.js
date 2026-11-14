@@ -13,10 +13,20 @@ let editing = null;          // 編集中のレコード（新規は null）
 let current = null;          // 詳細表示中のレコード
 let photoBlob = null;        // 新しく撮った写真（縮小済み）
 let aiRaw = null;
+let webRaw = null;           // ネット検索の結果
 let state = {};              // チップ・スケール・評価の値
 
 const COLOR = { red: "赤", white: "白", rose: "ロゼ", sparkling: "泡" };
-const KIND = { wine: "ワイン", sake: "日本酒" };
+const KIND = { wine: "ワイン", sake: "日本酒", shochu: "焼酎", beer: "ビール" };
+const GLYPH = { wine: "葡", sake: "酒", shochu: "焼", beer: "麦" };
+const LABELS = {
+  wine:   { producer: "生産者・ワイナリー", region: "地域", body: ["軽い", "重い"] },
+  sake:   { producer: "蔵元", region: "都道府県", body: ["淡麗", "濃醇"] },
+  shochu: { producer: "蔵元", region: "都道府県", body: ["すっきり", "濃厚"] },
+  beer:   { producer: "醸造所", region: "地域", body: ["軽い", "コク"] },
+};
+const CHIP_KEYS = ["wine_color", "serve_temp", "ingredient", "distillation"];
+const SCALE_KEYS = ["sweetness", "body", "bitterness"];
 
 /* ---------- util ---------- */
 function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("on"); clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove("on"), 2200); }
@@ -24,6 +34,7 @@ function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;
 function stars(n) { return n ? "★".repeat(n) + "☆".repeat(5 - n) : ""; }
 function today() { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); }
 function fmtDate(s) { if (!s) return ""; const [y, m, d] = s.split("-"); return `${y}.${m}.${d}`; }
+function numOrNull(v) { const n = parseFloat(String(v ?? "").replace(/[^\d.]/g, "")); return Number.isFinite(n) && n < 100 ? n : null; }
 function intOrNull(v) { const n = parseInt(String(v ?? "").replace(/[^\d]/g, ""), 10); return Number.isFinite(n) ? n : null; }
 function uid() { return crypto.randomUUID ? crypto.randomUUID() : ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, c => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)); }
 function strOrNull(v) { const s = String(v ?? "").trim(); return s ? s : null; }
@@ -67,10 +78,19 @@ function fillShops() {
 }
 
 /* ---------- list ---------- */
+function subline(d, withPlace) {
+  const parts = {
+    wine: [COLOR[d.wine_color], withPlace && d.country, d.vintage],
+    sake: [d.sake_grade, withPlace && d.region],
+    shochu: [d.ingredient && d.ingredient + (d.ingredient === "泡盛" ? "" : "焼酎"), withPlace && d.region],
+    beer: [d.beer_style, withPlace && d.country],
+  }[d.kind] || [];
+  return parts.filter(Boolean).join(" · ");
+}
 function renderList() {
   const q = $("q").value.trim().toLowerCase();
   let rows = drinks.filter(d => filterKind === "all" || d.kind === filterKind);
-  if (q) rows = rows.filter(d => [d.name, d.producer, d.country, d.region, d.shop, d.place, d.grape, d.sake_grade, d.rice, d.memo].join(" ").toLowerCase().includes(q));
+  if (q) rows = rows.filter(d => [d.name, d.producer, d.country, d.region, d.shop, d.place, d.grape, d.sake_grade, d.rice, d.ingredient, d.koji, d.beer_style, d.memo, d.description].join(" ").toLowerCase().includes(q));
   const sort = $("sort").value;
   if (sort === "rating") rows = [...rows].sort((a, b) => (b.rating || 0) - (a.rating || 0));
   if (sort === "again") rows = rows.filter(d => d.buy_again);
@@ -79,12 +99,10 @@ function renderList() {
   $("empty").classList.toggle("hidden", drinks.length > 0);
   $("grid").innerHTML = rows.map(d => {
     const url = d.photo_path && photoUrls[d.photo_path];
-    const sub = d.kind === "wine"
-      ? [COLOR[d.wine_color], d.country, d.vintage].filter(Boolean).join(" · ")
-      : [d.sake_grade, d.region].filter(Boolean).join(" · ");
+    const sub = subline(d, true);
     return `<button class="item" data-id="${d.id}" type="button">
       <div class="thumb" style="${url ? `background-image:url('${url}')` : ""}">
-        ${url ? "" : `<div class="ph">${d.kind === "wine" ? "葡" : "酒"}</div>`}
+        ${url ? "" : `<div class="ph">${GLYPH[d.kind] || "酒"}</div>`}
         <span class="tag ${d.kind}">${KIND[d.kind]}</span>
         ${d.buy_again ? `<span class="again">また買う</span>` : ""}
       </div>
@@ -124,17 +142,20 @@ document.querySelectorAll(".kindsw button").forEach(b => b.onclick = () => setKi
 function setKind(k) {
   state.kind = k;
   document.querySelectorAll(".kindsw button").forEach(b => b.classList.toggle("on", b.dataset.kind === k));
-  document.querySelectorAll(".only-wine").forEach(el => el.classList.toggle("hidden", k !== "wine"));
-  document.querySelectorAll(".only-sake").forEach(el => el.classList.toggle("hidden", k !== "sake"));
-  $("lbProducer").textContent = k === "sake" ? "蔵元" : "生産者・ワイナリー";
-  $("lbRegion").textContent = k === "sake" ? "都道府県" : "地域";
-  $("bodyL").textContent = k === "sake" ? "淡麗" : "軽い";
-  $("bodyR").textContent = k === "sake" ? "濃醇" : "重い";
+  ["wine", "sake", "shochu", "beer"].forEach(x => document.querySelectorAll(".only-" + x).forEach(el => el.classList.toggle("hidden", k !== x)));
+  const L = LABELS[k];
+  $("lbProducer").textContent = L.producer;
+  $("lbRegion").textContent = L.region;
+  $("bodyL").textContent = L.body[0]; $("bodyR").textContent = L.body[1];
+  document.querySelector('[data-scale="sweetness"]').classList.toggle("hidden", k === "beer");
+  document.querySelector('[data-scale="bitterness"]').classList.toggle("hidden", k !== "beer");
 }
-buildScale("sweetness"); buildScale("body"); buildRate();
+SCALE_KEYS.forEach(buildScale); buildRate();
 
 const F = () => $("form").elements;
-const TEXT_FIELDS = ["name", "producer", "country", "region", "grape", "vintage", "sake_grade", "polish_ratio", "rice", "memo", "price", "shop", "place", "drank_on"];
+const TEXT_FIELDS = ["name", "producer", "country", "region", "grape", "vintage", "sake_grade", "polish_ratio", "rice", "koji", "beer_style", "description", "memo", "price", "shop", "place", "drank_on"];
+const WEB_FIELDS = ["name", "producer", "country", "region", "grape", "vintage", "sake_grade", "polish_ratio", "rice", "koji", "beer_style", "description"];
+const abvInput = () => (state.kind === "beer" ? F().abv_beer : F().abv);
 
 function fillForm(d, fromAi = false) {
   const f = F();
@@ -145,10 +166,12 @@ function fillForm(d, fromAi = false) {
     f[k].value = v ?? "";
     f[k].classList.toggle("ai", fromAi);
   });
-  if (!fromAi) f.buy_again.checked = !!d.buy_again;
-  ["wine_color", "serve_temp", "sweetness", "body", "rating"].forEach(k => { if (!fromAi || d[k] != null) state[k] = d[k] ?? null; });
-  if (d.kind === "wine" || d.kind === "sake") setKind(d.kind);
-  ["wine_color", "serve_temp"].forEach(paintChips); paintScale("sweetness"); paintScale("body"); paintRate();
+  if (!fromAi) { f.buy_again.checked = !!d.buy_again; state.sources = d.sources || null; webRaw = null; renderSources(); }
+  $("descWrap").classList.toggle("hidden", !f.description.value);
+  [...CHIP_KEYS, ...SCALE_KEYS, "rating"].forEach(k => { if (!fromAi || d[k] != null) state[k] = d[k] ?? null; });
+  if (KIND[d.kind]) setKind(d.kind);
+  if (d.abv != null && d.abv !== "") { const el = abvInput(); el.value = d.abv; el.classList.toggle("ai", fromAi); }
+  CHIP_KEYS.forEach(paintChips); SCALE_KEYS.forEach(paintScale); paintRate();
 }
 document.querySelectorAll("#form input, #form textarea").forEach(el => el.addEventListener("input", () => el.classList.remove("ai")));
 
@@ -159,8 +182,10 @@ function resetEdit() {
   document.querySelectorAll("#form .ai").forEach(el => el.classList.remove("ai"));
   $("photo").value = "";
   $("preview").removeAttribute("src");
-  ["photoWrap", "reading", "aiNote", "form", "saveBar", "aiMark", "reRead"].forEach(id => $(id).classList.add("hidden"));
-  $("aiNote").classList.remove("err");
+  ["photoWrap", "reading", "aiNote", "form", "saveBar", "aiMark", "reRead", "webReading", "webNote", "descWrap", "srcList"].forEach(id => $(id).classList.add("hidden"));
+  $("aiNote").classList.remove("err"); $("webNote").classList.remove("err");
+  webRaw = null; $("webBtn").disabled = false;
+  CHIP_KEYS.forEach(paintChips); SCALE_KEYS.forEach(paintScale); paintRate();
   $("shotBox").classList.remove("hidden"); $("manual").classList.remove("hidden");
 }
 function showForm() {
@@ -217,14 +242,15 @@ async function readLabel() {
     if (r.error) throw new Error(r.error + "。手で入力してください。");
     aiRaw = r;
     const mapped = { ...r };
-    if (!["wine", "sake"].includes(mapped.kind)) delete mapped.kind;
+    if (!KIND[mapped.kind]) delete mapped.kind;
     mapped.vintage = intOrNull(r.vintage); mapped.polish_ratio = intOrNull(r.polish_ratio);
-    ["sweetness", "body"].forEach(k => { const n = intOrNull(r[k]); mapped[k] = n >= 1 && n <= 5 ? n : null; });
+    SCALE_KEYS.forEach(k => { const n = intOrNull(r[k]); mapped[k] = n >= 1 && n <= 5 ? n : null; });
     if (!COLOR[mapped.wine_color]) mapped.wine_color = null;
+    mapped.abv = numOrNull(r.abv);
     fillForm(mapped, true);
     $("aiMark").classList.remove("hidden");
     const notes = ["黄色の項目はAIが入力しました。違っていたら直してください。"];
-    if (mapped.sweetness || mapped.body) notes.push("味わいは銘柄の一般的な傾向です。自分の感じ方で直してください。");
+    if (mapped.sweetness || mapped.body || mapped.bitterness) notes.push("味わいは銘柄の一般的な傾向です。自分の感じ方で直してください。");
     if (r.note) notes.push("AIのメモ：" + r.note);
     $("aiNote").innerHTML = notes.map(esc).join("<br>");
     $("aiNote").classList.remove("hidden");
@@ -236,6 +262,61 @@ async function readLabel() {
     $("reRead").classList.remove("hidden");
   }
 }
+
+function renderSources() {
+  const list = state.sources || [];
+  $("srcList").classList.toggle("hidden", !list.length);
+  $("srcList").innerHTML = list.length ? `<b>参考にしたページ</b>` + list.map(s => `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title || s.url)}</a>`).join("") : "";
+}
+
+$("webBtn").onclick = async () => {
+  const f = F();
+  if (!f.name.value.trim()) { toast("先に銘柄名を入れてください"); f.name.focus(); return; }
+  const drink = { kind: state.kind || "wine" };
+  ["name", "producer", "country", "region", "grape", "vintage", "sake_grade", "polish_ratio", "rice", "koji", "beer_style"].forEach(k => { const v = f[k].value.trim(); if (v) drink[k] = v; });
+  ["wine_color", "ingredient", "distillation"].forEach(k => { if (state[k]) drink[k] = state[k]; });
+  if (abvInput().value.trim()) drink.abv = abvInput().value.trim();
+  $("webBtn").disabled = true;
+  $("webReading").classList.remove("hidden"); $("webNote").classList.add("hidden"); $("webNote").classList.remove("err");
+  try {
+    const { data, error } = await sb.functions.invoke("research-drink", { body: { drink } });
+    if (error) {
+      let msg = "調べるのに失敗しました。";
+      try { const j = await error.context.json(); if (j.error) msg = j.error + "。"; } catch {}
+      throw new Error(msg);
+    }
+    const r = data.result || {};
+    webRaw = r;
+    let filled = 0;
+    // 自分で入力した欄（黄色でない欄）は上書きしない
+    WEB_FIELDS.forEach(k => {
+      let v = r[k];
+      if (k === "vintage" || k === "polish_ratio") v = intOrNull(v);
+      if (v === null || v === undefined || v === "") return;
+      const el = f[k];
+      if (el.value.trim() && !el.classList.contains("ai")) return;
+      if (String(el.value) !== String(v)) filled++;
+      el.value = v; el.classList.add("ai");
+    });
+    if (state.kind === "wine" && COLOR[r.wine_color] && !state.wine_color) { state.wine_color = r.wine_color; paintChips("wine_color"); filled++; }
+    ["ingredient", "distillation"].forEach(k => { if (r[k] && !state[k] && document.querySelector(`[data-chips="${k}"] [data-v="${r[k]}"]`)) { state[k] = r[k]; paintChips(k); filled++; } });
+    { const a = numOrNull(r.abv), el = abvInput(); if (a != null && (!el.value.trim() || el.classList.contains("ai"))) { el.value = a; el.classList.add("ai"); filled++; } }
+    SCALE_KEYS.forEach(k => { const n = intOrNull(r[k]); if (n >= 1 && n <= 5) { state[k] = n; paintScale(k); } });
+    $("descWrap").classList.toggle("hidden", !f.description.value);
+    state.sources = r.sources?.length ? r.sources : state.sources;
+    renderSources();
+    const notes = [filled || f.description.value ? "ネットで調べた内容を黄色の欄に入れました。自分で入力した欄はそのままです。" : "新しく分かったことはありませんでした。"];
+    if (r.note) notes.push("AIのメモ：" + r.note);
+    if (!r.sources?.length) notes.push("参考にしたページを確認できなかったので、内容は念のため見直してください。");
+    $("webNote").innerHTML = notes.map(esc).join("<br>");
+    $("webNote").classList.remove("hidden");
+  } catch (err) {
+    $("webNote").textContent = err.message || "調べるのに失敗しました。";
+    $("webNote").classList.add("err"); $("webNote").classList.remove("hidden");
+  } finally {
+    $("webReading").classList.add("hidden"); $("webBtn").disabled = false;
+  }
+};
 
 $("saveBtn").onclick = async () => {
   const f = F();
@@ -253,12 +334,20 @@ $("saveBtn").onclick = async () => {
       sake_grade: k === "sake" ? strOrNull(f.sake_grade.value) : null,
       polish_ratio: k === "sake" ? intOrNull(f.polish_ratio.value) : null,
       rice: k === "sake" ? strOrNull(f.rice.value) : null,
-      serve_temp: k === "sake" ? state.serve_temp ?? null : null,
-      sweetness: state.sweetness ?? null, body: state.body ?? null, rating: state.rating ?? null,
+      serve_temp: k !== "wine" ? state.serve_temp ?? null : null,
+      ingredient: k === "shochu" ? state.ingredient ?? null : null,
+      koji: k === "shochu" ? strOrNull(f.koji.value) : null,
+      distillation: k === "shochu" ? state.distillation ?? null : null,
+      beer_style: k === "beer" ? strOrNull(f.beer_style.value) : null,
+      abv: k === "shochu" ? numOrNull(f.abv.value) : k === "beer" ? numOrNull(f.abv_beer.value) : null,
+      sweetness: k !== "beer" ? state.sweetness ?? null : null, body: state.body ?? null,
+      bitterness: k === "beer" ? state.bitterness ?? null : null, rating: state.rating ?? null,
       memo: strOrNull(f.memo.value), price: intOrNull(f.price.value),
       shop: strOrNull(f.shop.value), place: strOrNull(f.place.value),
       drank_on: f.drank_on.value || today(),
       buy_again: f.buy_again.checked,
+      description: strOrNull(f.description.value),
+      sources: state.sources?.length ? state.sources : null,
     };
     if (aiRaw) row.ai_raw = aiRaw;
     if (photoBlob) {
@@ -296,17 +385,21 @@ function openDetail(d) {
   current = d;
   const url = d.photo_path && photoUrls[d.photo_path];
   const scaleTxt = (n, l, r) => n ? `${l} ${"●".repeat(n)}${"○".repeat(5 - n)} ${r}` : null;
-  const items = d.kind === "wine" ? [
-    ["生産者", d.producer], ["産地", [d.country, d.region].filter(Boolean).join(" / ")], ["色", COLOR[d.wine_color]],
-    ["品種", d.grape], ["ヴィンテージ", d.vintage],
-    ["甘さ", scaleTxt(d.sweetness, "辛口", "甘口")], ["重さ", scaleTxt(d.body, "軽い", "重い")],
-  ] : [
-    ["蔵元", d.producer], ["産地", [d.country, d.region].filter(Boolean).join(" / ")], ["特定名称", d.sake_grade],
-    ["精米歩合", d.polish_ratio ? d.polish_ratio + "%" : null], ["酒米", d.rice],
-    ["甘さ", scaleTxt(d.sweetness, "辛口", "甘口")], ["味の濃さ", scaleTxt(d.body, "淡麗", "濃醇")], ["温度", d.serve_temp],
-  ];
+  const L = LABELS[d.kind] || LABELS.wine;
+  const place = ["産地", [d.country, d.region].filter(Boolean).join(" / ")];
+  const abv = ["度数", d.abv != null ? d.abv + "%" : null];
+  const items = {
+    wine: [["生産者", d.producer], place, ["色", COLOR[d.wine_color]], ["品種", d.grape], ["ヴィンテージ", d.vintage],
+      ["甘さ", scaleTxt(d.sweetness, "辛口", "甘口")], ["重さ", scaleTxt(d.body, ...L.body)]],
+    sake: [["蔵元", d.producer], place, ["特定名称", d.sake_grade], ["精米歩合", d.polish_ratio ? d.polish_ratio + "%" : null], ["酒米", d.rice],
+      ["甘さ", scaleTxt(d.sweetness, "辛口", "甘口")], ["味の濃さ", scaleTxt(d.body, ...L.body)], ["温度", d.serve_temp]],
+    shochu: [["蔵元", d.producer], place, ["原料", d.ingredient], ["麹", d.koji], ["蒸留", d.distillation], abv,
+      ["甘さ", scaleTxt(d.sweetness, "辛口", "甘口")], ["味の濃さ", scaleTxt(d.body, ...L.body)], ["飲み方", d.serve_temp]],
+    beer: [["醸造所", d.producer], place, ["スタイル", d.beer_style], abv,
+      ["苦味", scaleTxt(d.bitterness, "弱", "強")], ["コク", scaleTxt(d.body, ...L.body)], ["飲んだ形", d.serve_temp]],
+  }[d.kind] || [];
   items.push(["飲んだ日", fmtDate(d.drank_on)], ["価格", d.price ? d.price.toLocaleString() + "円" : null], ["買った店", d.shop], ["飲んだ場所", d.place]);
-  const sub = d.kind === "wine" ? [COLOR[d.wine_color], d.vintage].filter(Boolean).join(" · ") : [d.sake_grade].filter(Boolean).join("");
+  const sub = subline(d, false);
   $("detailBody").innerHTML = `
     ${url ? `<img class="dhero" src="${url}" alt="">` : ""}
     <span class="dkind ${d.kind}">${KIND[d.kind]}</span>${d.buy_again ? ` <span class="dkind" style="background:var(--gold)">また買いたい</span>` : ""}
@@ -314,7 +407,9 @@ function openDetail(d) {
     <p class="dsub">${esc(sub)}</p>
     ${d.rating ? `<p class="drate">${stars(d.rating)}</p>` : ""}
     ${d.memo ? `<div class="dmemo">${esc(d.memo)}</div>` : ""}
-    <dl class="dl">${items.filter(([, v]) => v).map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join("")}</dl>`;
+    ${d.description ? `<p class="ddesc">${esc(d.description)}</p>` : ""}
+    <dl class="dl">${items.filter(([, v]) => v).map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join("")}</dl>
+    ${d.sources?.length ? `<div class="srcs" style="margin-top:20px"><b>参考にしたページ</b>${d.sources.map(s => `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title || s.url)}</a>`).join("")}</div>` : ""}`;
   $("detail").classList.remove("hidden"); $("detail").scrollTop = 0;
 }
 $("detailClose").onclick = () => $("detail").classList.add("hidden");
