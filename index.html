@@ -141,6 +141,12 @@ select.sort{border:1px solid var(--line);background:var(--card);border-radius:99
 .webbtn{display:flex;flex-direction:column;align-items:center;width:100%;margin-top:16px;border:1px solid var(--sake);color:var(--sake);background:none;border-radius:12px;padding:12px;font-size:15px}
 .webbtn small{font-size:11px;color:var(--mu);margin-top:2px}
 .webbtn:disabled{opacity:.45}
+.cands{margin-top:4px;display:grid;gap:8px}
+.cands b{font-size:12px;color:var(--mu);font-weight:600}
+.cand{display:block;text-align:left;border:1px solid var(--line);background:var(--card);border-radius:12px;padding:11px 14px}
+.cand strong{display:block;font-family:var(--serif);font-size:15px}
+.cand span{display:block;font-size:12px;color:var(--mu);margin-top:2px}
+.cand.on{border-color:var(--gold);background:#fbf5e8;box-shadow:0 0 0 1px var(--gold) inset}
 .srcs{margin-top:10px;font-size:12px;line-height:1.7}
 .srcs b{display:block;color:var(--mu);font-weight:600;font-size:11px;letter-spacing:.1em}
 .srcs a{color:var(--sake);word-break:break-all;display:block}
@@ -272,6 +278,7 @@ select.sort{border:1px solid var(--line);background:var(--card);border-radius:99
       <button class="webbtn" id="webBtn" type="button">ネットで詳しく調べる<small>1回 約2〜3円・20秒ほど</small></button>
       <div class="reading hidden" id="webReading"><div class="spin"></div>ネットで調べています…（20秒ほどかかります）</div>
       <div class="note hidden" id="webNote"></div>
+      <div class="cands hidden" id="candList"></div>
       <label class="f hidden" id="descWrap"><span>特徴（ネットで調べた要約）</span><textarea name="description" style="min-height:80px"></textarea></label>
       <div class="srcs hidden" id="srcList"></div>
 

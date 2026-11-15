@@ -237,6 +237,7 @@ function resetEdit() {
   ["photoWrap", "reading", "aiNote", "form", "saveBar", "aiMark", "reRead", "webReading", "webNote", "descWrap", "srcList"].forEach(id => $(id).classList.add("hidden"));
   $("aiNote").classList.remove("err"); $("webNote").classList.remove("err");
   webRaw = null; $("webBtn").disabled = false;
+  webCandidates = []; renderCandidates();
   CHIP_KEYS.forEach(paintChips); SCALE_KEYS.forEach(paintScale); paintRate();
   $("shotBox").classList.remove("hidden"); $("manual").classList.remove("hidden");
 }
@@ -322,6 +323,64 @@ function renderSources() {
   $("srcList").innerHTML = list.length ? `<b>参考にしたページ</b>` + list.map(s => `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title || s.url)}</a>`).join("") : "";
 }
 
+// ネットで調べた結果（または選んだ候補）を欄に入れる。自分で入力した欄（黄色でない欄）は上書きしない
+function applyWeb(r, { force = false } = {}) {
+  const f = F();
+  let filled = 0;
+  WEB_FIELDS.forEach(k => {
+    let v = r[k];
+    if (k === "vintage" || k === "polish_ratio") v = intOrNull(v);
+    if (v === null || v === undefined || v === "") return;
+    const el = f[k];
+    if (el.value.trim() && !el.classList.contains("ai")) return;
+    if (String(el.value) !== String(v)) filled++;
+    el.value = v; el.classList.add("ai");
+  });
+  if (state.kind === "wine" && COLOR[r.wine_color] && (!state.wine_color || force)) { state.wine_color = r.wine_color; paintChips("wine_color"); filled++; }
+  ["ingredient", "distillation"].forEach(k => { if (r[k] && (!state[k] || force) && document.querySelector(`[data-chips="${k}"] [data-v="${r[k]}"]`)) { state[k] = r[k]; paintChips(k); filled++; } });
+  { const a = numOrNull(r.abv), el = abvInput(); if (a != null && (!el.value.trim() || el.classList.contains("ai"))) { el.value = a; el.classList.add("ai"); filled++; } }
+  SCALE_KEYS.forEach(k => { const n = intOrNull(r[k]); if (n >= 1 && n <= 5) { state[k] = n; paintScale(k); } });
+  $("descWrap").classList.toggle("hidden", !f.description.value);
+  return filled;
+}
+
+let webCandidates = [];
+function renderCandidates(picked = -1) {
+  const box = $("candList");
+  box.classList.toggle("hidden", !webCandidates.length);
+  if (!webCandidates.length) { box.innerHTML = ""; return; }
+  const kindNow = state.kind;
+  box.innerHTML = `<b>どの商品ですか？タップすると精米歩合などを入れます</b>` + webCandidates.map((c, i) => {
+    const spec = kindNow === "sake" ? [c.sake_grade, c.polish_ratio && `精米${c.polish_ratio}%`, c.rice, c.abv && `${c.abv}度`]
+      : kindNow === "wine" ? [c.grape, c.vintage, c.abv && `${c.abv}%`]
+      : kindNow === "shochu" ? [c.ingredient, c.koji, c.abv && `${c.abv}度`]
+      : [c.beer_style, c.abv && `${c.abv}%`];
+    return `<button type="button" class="cand${i === picked ? " on" : ""}" data-i="${i}"><strong>${esc(c.name)}</strong><span>${esc(spec.filter(Boolean).join(" · "))}</span></button>`;
+  }).join("");
+}
+$("candList").onclick = e => {
+  const b = e.target.closest(".cand"); if (!b) return;
+  const i = +b.dataset.i, c = webCandidates[i];
+  const f = F();
+  // 候補を選んだときは、AIが入れた欄（黄色）を候補の値で置き換える。商品固有でない欄は消さない
+  applyWeb(c, { force: true });
+  if (c.description && (!f.description.value.trim() || f.description.classList.contains("ai"))) { f.description.value = c.description; f.description.classList.add("ai"); $("descWrap").classList.remove("hidden"); }
+  renderCandidates(i);
+  toast("「" + c.name + "」の情報を入れました");
+};
+
+async function labelImageForWeb() {
+  try {
+    let blob = photoBlob;
+    if (!blob && editing?.photo_path) {
+      await ensureUrls([editing.photo_path]);
+      blob = await fetch(photoUrls[editing.photo_path]).then(r => r.ok ? r.blob() : null);
+    }
+    if (!blob) return null;
+    return await blobToBase64(await shrink(blob, 768, 0.75));
+  } catch { return null; }
+}
+
 $("webBtn").onclick = async () => {
   const f = F();
   if (!f.name.value.trim()) { toast("先に銘柄名を入れてください"); f.name.focus(); return; }
@@ -331,8 +390,10 @@ $("webBtn").onclick = async () => {
   if (abvInput().value.trim()) drink.abv = abvInput().value.trim();
   $("webBtn").disabled = true;
   $("webReading").classList.remove("hidden"); $("webNote").classList.add("hidden"); $("webNote").classList.remove("err");
+  webCandidates = []; renderCandidates();
   try {
-    const { data, error } = await sb.functions.invoke("research-drink", { body: { drink } });
+    const image = await labelImageForWeb();
+    const { data, error } = await sb.functions.invoke("research-drink", { body: image ? { drink, image } : { drink } });
     if (error) {
       let msg = "調べるのに失敗しました。";
       try { const j = await error.context.json(); if (j.error) msg = j.error + "。"; } catch {}
@@ -340,25 +401,14 @@ $("webBtn").onclick = async () => {
     }
     const r = data.result || {};
     webRaw = r;
-    let filled = 0;
-    // 自分で入力した欄（黄色でない欄）は上書きしない
-    WEB_FIELDS.forEach(k => {
-      let v = r[k];
-      if (k === "vintage" || k === "polish_ratio") v = intOrNull(v);
-      if (v === null || v === undefined || v === "") return;
-      const el = f[k];
-      if (el.value.trim() && !el.classList.contains("ai")) return;
-      if (String(el.value) !== String(v)) filled++;
-      el.value = v; el.classList.add("ai");
-    });
-    if (state.kind === "wine" && COLOR[r.wine_color] && !state.wine_color) { state.wine_color = r.wine_color; paintChips("wine_color"); filled++; }
-    ["ingredient", "distillation"].forEach(k => { if (r[k] && !state[k] && document.querySelector(`[data-chips="${k}"] [data-v="${r[k]}"]`)) { state[k] = r[k]; paintChips(k); filled++; } });
-    { const a = numOrNull(r.abv), el = abvInput(); if (a != null && (!el.value.trim() || el.classList.contains("ai"))) { el.value = a; el.classList.add("ai"); filled++; } }
-    SCALE_KEYS.forEach(k => { const n = intOrNull(r[k]); if (n >= 1 && n <= 5) { state[k] = n; paintScale(k); } });
-    $("descWrap").classList.toggle("hidden", !f.description.value);
+    const filled = applyWeb(r);
     state.sources = r.sources?.length ? r.sources : state.sources;
     renderSources();
-    const notes = [filled || f.description.value ? "ネットで調べた内容を黄色の欄に入れました。自分で入力した欄はそのままです。" : "新しく分かったことはありませんでした。"];
+    webCandidates = Array.isArray(r.candidates) ? r.candidates : [];
+    renderCandidates();
+    const notes = [];
+    if (webCandidates.length) notes.push(`同じ名前の商品が${webCandidates.length}つ見つかりました。下の候補から選ぶと、精米歩合などが入ります。`);
+    else notes.push(filled || f.description.value ? "ネットで調べた内容を黄色の欄に入れました。自分で入力した欄はそのままです。" : "新しく分かったことはありませんでした。");
     if (r.note) notes.push("AIのメモ：" + r.note);
     if (!r.sources?.length) notes.push("参考にしたページを確認できなかったので、内容は念のため見直してください。");
     $("webNote").innerHTML = notes.map(esc).join("<br>");

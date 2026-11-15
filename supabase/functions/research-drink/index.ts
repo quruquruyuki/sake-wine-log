@@ -22,7 +22,10 @@ ${known}
 
 調べた結果を、次のJSONだけで返してください（前後に文章を付けない）。
 - 検索で確認できなかった項目は null にする。推測では埋めない。
-- 別の商品（同じ蔵の別の銘柄など）と取り違えないよう注意し、自信がなければ null にする。
+- 別の商品（同じ蔵の別の銘柄など）と取り違えないよう注意する。
+- ラベル写真が付いている場合は、ラベルの色・デザイン・書かれた文字を商品ページの写真や説明と照らし合わせて、どの商品かを特定する。
+- 同じブランド名で複数の商品（純米大吟醸・純米酒・本醸造など）があり、1つに特定できない場合は、全商品に共通する項目だけを上の欄に入れ、商品ごとの情報を candidates に最大6件入れる。特定できた場合は candidates を空配列にする。
+- 精米歩合・酒米・度数・品種など商品ごとに違う数値は、特定できた商品か candidates の各商品にだけ入れる。
 - description は自分の言葉で80〜150字程度にまとめる（サイトの文章をそのまま写さない）。
 - sources には実際に参考にしたページのURLとタイトルを最大3件入れる。
 
@@ -48,6 +51,7 @@ ${known}
   "bitterness": 1〜5（ビールのみ。IBUや説明が根拠にあるときだけ）,
   "description": "味わいや特徴の要約",
   "sources": [{"url": "...", "title": "..."}],
+  "candidates": [{"name": "商品名", "sake_grade": "...", "polish_ratio": 数字, "rice": "...", "abv": 数字, "grape": "...", "vintage": 数字, "ingredient": "...", "koji": "...", "beer_style": "...", "sweetness": 1〜5, "body": 1〜5, "bitterness": 1〜5, "description": "その商品の特徴を40〜80字で"}],
   "note": "注意点があれば短く。なければ null"
 }`;
 }
@@ -59,12 +63,20 @@ Deno.serve(async (req) => {
   if (!apiKey) return json({ error: "ANTHROPIC_API_KEY が未設定です" }, 500);
 
   let drink: Record<string, unknown>;
-  try { drink = (await req.json()).drink ?? {}; } catch { return json({ error: "リクエストが読めません" }, 400); }
+  let image: string | null = null;
+  try {
+    const body = await req.json();
+    drink = body.drink ?? {};
+    if (typeof body.image === "string" && body.image.length > 100 && body.image.length < 2_000_000) image = body.image;
+  } catch { return json({ error: "リクエストが読めません" }, 400); }
   const allowed = ["kind", "name", "producer", "country", "region", "wine_color", "grape", "vintage", "sake_grade", "polish_ratio", "rice", "ingredient", "koji", "distillation", "beer_style", "abv"];
   drink = Object.fromEntries(Object.entries(drink).filter(([k, v]) => allowed.includes(k) && String(v ?? "").length < 200));
   if (!drink.name || String(drink.name).trim().length === 0) return json({ error: "銘柄名がありません" }, 400);
 
-  const messages: any[] = [{ role: "user", content: buildPrompt(drink) }];
+  const userContent: any[] = [];
+  if (image) userContent.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: image } });
+  userContent.push({ type: "text", text: (image ? "【ラベル写真を添付しています】\n" : "") + buildPrompt(drink) });
+  const messages: any[] = [{ role: "user", content: userContent }];
   const seenUrls = new Set<string>();
   let data: any = null;
   let searches = 0;
@@ -76,9 +88,9 @@ Deno.serve(async (req) => {
       headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
       body: JSON.stringify({
         model: MODEL,
-        max_tokens: 2000,
+        max_tokens: 3500,
         messages,
-        tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 3, user_location: { type: "approximate", country: "JP", timezone: "Asia/Tokyo" } }],
+        tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 5, user_location: { type: "approximate", country: "JP", timezone: "Asia/Tokyo" } }],
       }),
     });
     if (!res.ok) {
@@ -109,5 +121,6 @@ Deno.serve(async (req) => {
     .slice(0, 3)
     .map((s: any) => ({ url: s.url, title: String(s.title ?? s.url).slice(0, 120) }));
 
+  parsed.candidates = Array.isArray(parsed.candidates) ? parsed.candidates.filter((c: any) => c && c.name).slice(0, 6) : [];
   return json({ result: parsed, searches });
 });
