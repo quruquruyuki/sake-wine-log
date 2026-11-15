@@ -40,6 +40,29 @@ const PROMPT = `あなたはワイン・日本酒・焼酎・ビールのラベ�
 
 写真がワイン・日本酒・焼酎・ビールのラベルでない場合は {"error": "ラベルが見つかりませんでした"} を返してください。`;
 
+// 居酒屋などのメニュー写真から、載っているお酒を一覧にする
+const MENU_PROMPT = `これは居酒屋・レストランなどのお酒のメニューの写真です。
+メニューに載っているワイン・日本酒・焼酎・ビールを、書かれている順にすべて読み取り、次のJSONだけで返してください（前後に文章を付けない）。
+読めない項目は null にします。推測で埋めないでください。
+
+{
+  "shop": "店名（メニューに書かれていれば。なければ null）",
+  "items": [
+    {
+      "name": "銘柄名（メニュー表記どおり）",
+      "kind": "wine" | "sake" | "shochu" | "beer" | null,
+      "sake_grade": "純米吟醸などの特定名称（書かれていれば）",
+      "producer": "蔵元・生産者（書かれていれば）",
+      "region": "産地・都道府県（書かれていれば）",
+      "price": 値段の数字（円。複数サイズがあれば一番小さいもの） | null,
+      "size": "グラス・1合・90mlなど、その値段の量" | null,
+      "note": "メニューに添えられた説明（短く）" | null
+    }
+  ]
+}
+
+お酒のメニューが写っていない場合は {"error": "メニューが見つかりませんでした"} を返してください。`;
+
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -54,9 +77,10 @@ Deno.serve(async (req) => {
   const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
   if (!apiKey) return json({ error: "ANTHROPIC_API_KEY が未設定です" }, 500);
 
-  let images: string[], mediaType: string;
+  let images: string[], mediaType: string, mode = "label";
   try {
     const body = await req.json();
+    if (body.mode === "menu") mode = "menu";
     images = Array.isArray(body.images) ? body.images : [body.image];
     mediaType = body.mediaType ?? "image/jpeg";
   } catch {
@@ -76,12 +100,12 @@ Deno.serve(async (req) => {
     },
     body: JSON.stringify({
       model: MODEL,
-      max_tokens: 800,
+      max_tokens: mode === "menu" ? 3000 : 800,
       messages: [{
         role: "user",
         content: [
           ...images.map((data) => ({ type: "image", source: { type: "base64", media_type: mediaType, data } })),
-          { type: "text", text: (images.length > 1 ? `【同じお酒の写真が${images.length}枚あります】\n` : "") + PROMPT },
+          { type: "text", text: mode === "menu" ? MENU_PROMPT : (images.length > 1 ? `【同じお酒の写真が${images.length}枚あります】\n` : "") + PROMPT },
         ],
       }],
     }),

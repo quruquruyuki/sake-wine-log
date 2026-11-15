@@ -74,6 +74,8 @@ select.sort{border:1px solid var(--line);background:var(--card);border-radius:99
 .shot{display:block;border:1.5px dashed #cdbfab;border-radius:14px;background:var(--card);padding:34px 16px;text-align:center;color:var(--mu);line-height:1.8}
 .shot b{display:block;font-family:var(--serif);font-size:19px;color:var(--ink)}
 .shot input{display:none}
+.shot.menu{margin-top:10px;padding:16px;border-style:solid;border-width:1px;border-color:var(--line)}
+.shot.menu b{font-size:16px}
 .picStrip{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
 .pic{position:relative;aspect-ratio:3/4;border-radius:10px;overflow:hidden;background:#e9e1d5}
 .pic img{width:100%;height:100%;object-fit:cover;display:block}
@@ -217,15 +219,20 @@ select.sort{border:1px solid var(--line);background:var(--card);border-radius:99
       <b>ラベルを撮る</b>撮影するか、写真を選ぶと<br>AIが銘柄や産地を読み取ります
       <input id="photo" type="file" accept="image/*">
     </label>
+    <label class="shot menu" id="menuBox">
+      <b>お店のメニューを撮る</b>居酒屋などで、メニューから飲んだお酒を選べます
+      <input id="menuPhoto" type="file" accept="image/*">
+    </label>
     <div id="photoWrap" class="hidden">
       <div class="picStrip" id="picStrip"></div>
-      <p class="pichint">裏ラベルも撮ると、精米歩合や原材料まで読み取りやすくなります（最大4枚）</p>
+      <p class="pichint" id="picHint">裏ラベルも撮ると、精米歩合や原材料まで読み取りやすくなります（最大4枚）</p>
       <div class="chips" style="margin-top:8px;justify-content:center">
         <button type="button" id="reRead" class="hidden">もう一度読み取る</button>
       </div>
     </div>
-    <div class="reading hidden" id="reading"><div class="spin"></div>ラベルを読み取っています…</div>
+    <div class="reading hidden" id="reading"><div class="spin"></div><span id="readingText">ラベルを読み取っています…</span></div>
     <div class="note hidden" id="aiNote"></div>
+    <div class="cands hidden" id="menuList"></div>
     <button class="linkbtn" id="manual" type="button">写真なしで手入力する</button>
 
     <form id="form" class="hidden" autocomplete="off">

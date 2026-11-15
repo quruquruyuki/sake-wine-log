@@ -13,6 +13,8 @@ let editing = null;          // 編集中のレコード（新規は null）
 let current = null;          // 詳細表示中のレコード
 let pics = [];               // 編集中の写真（先頭が表ラベル）。{ blob } か { photo_path, thumb_path }
 const MAX_PICS = 4;
+let menuMode = false;        // メニューの写真から記録しているとき
+let menuItems = [];
 let aiRaw = null;
 let webRaw = null;           // ネット検索の結果
 let state = {};              // チップ・スケール・評価の値
@@ -239,9 +241,11 @@ document.querySelectorAll("#form input, #form textarea").forEach(el => el.addEve
 /* ---------- add / edit ---------- */
 function resetEdit() {
   pics = []; aiRaw = null; state = {};
+  menuMode = false; menuItems = []; renderMenu();
+  F().memo.placeholder = "香り、合わせた料理、誰と飲んだか など";
   $("form").reset();
   document.querySelectorAll("#form .ai").forEach(el => el.classList.remove("ai"));
-  $("photo").value = "";
+  $("photo").value = ""; $("menuPhoto").value = "";
   renderPics();
   ["photoWrap", "reading", "aiNote", "form", "saveBar", "aiMark", "reRead", "webReading", "webNote", "descWrap", "srcList"].forEach(id => $(id).classList.add("hidden"));
   $("aiNote").classList.remove("err"); $("webNote").classList.remove("err");
@@ -275,17 +279,20 @@ async function openEdit(d) {
 $("fab").onclick = openAdd;
 $("editClose").onclick = () => { $("edit").classList.add("hidden"); if (editing) openDetail(editing); };
 $("manual").onclick = showForm;
-$("reRead").onclick = () => readLabel();
+$("reRead").onclick = () => (menuMode ? readMenu() : readLabel());
 
 // 写真の並び（先頭＝表ラベル）。× で外す、＋ で裏ラベルなどを足す
 function renderPics() {
   const has = pics.length > 0;
   $("shotBox").classList.toggle("hidden", has);
+  $("menuBox").classList.toggle("hidden", has);
+  $("readingText").textContent = menuMode ? "メニューを読み取っています…" : "ラベルを読み取っています…";
+  $("picHint").textContent = menuMode ? "飲んだお酒の瓶やラベルの写真も一緒に残せます（最大4枚）" : "裏ラベルも撮ると、精米歩合や原材料まで読み取りやすくなります（最大4枚）";
   $("photoWrap").classList.toggle("hidden", !has);
   $("picStrip").innerHTML = pics.map((p, i) => {
     const url = p.blob ? (p.url ||= URL.createObjectURL(p.blob)) : photoUrls[p.thumb_path || p.photo_path] || "";
-    return `<div class="pic"><img src="${url}" alt=""><span class="picTag">${i === 0 ? "表" : i === 1 ? "裏" : i + 1}</span><button type="button" class="picDel" data-i="${i}" aria-label="外す">×</button></div>`;
-  }).join("") + (pics.length < MAX_PICS ? `<label class="pic add">＋<small>${pics.length === 1 ? "裏ラベルを追加" : "写真を追加"}</small><input id="photoMore" type="file" accept="image/*"></label>` : `<input id="photoMore" type="file" accept="image/*" class="hidden">`);
+    return `<div class="pic"><img src="${url}" alt=""><span class="picTag">${menuMode ? (i === 0 ? "メニュー" : i + 1) : i === 0 ? "表" : i === 1 ? "裏" : i + 1}</span><button type="button" class="picDel" data-i="${i}" aria-label="外す">×</button></div>`;
+  }).join("") + (pics.length < MAX_PICS ? `<label class="pic add">＋<small>${menuMode ? "お酒の写真を追加" : pics.length === 1 ? "裏ラベルを追加" : "写真を追加"}</small><input id="photoMore" type="file" accept="image/*"></label>` : `<input id="photoMore" type="file" accept="image/*" class="hidden">`);
   $("photoMore").onchange = e => addPhoto(e.target.files[0], e.target);
 }
 $("picStrip").onclick = e => {
@@ -302,10 +309,77 @@ async function addPhoto(file, input) {
   pics.push({ blob });
   renderPics();
   showForm();
-  if (editing) { $("reRead").classList.remove("hidden"); toast("「もう一度読み取る」で新しい写真も読ませられます"); return; }
+  if (editing || menuMode) { $("reRead").classList.remove("hidden"); if (editing) toast("「もう一度読み取る」で新しい写真も読ませられます"); return; }
   readLabel(); // 新規のときは、写真を足すたびに全部の写真で読み直す
 }
 $("photo").onchange = e => addPhoto(e.target.files[0], e.target);
+
+/* ---------- メニューから記録 ---------- */
+$("menuPhoto").onchange = async e => {
+  const file = e.target.files[0]; if (!file) return;
+  let blob;
+  try { blob = await shrink(file, 1400, 0.8); } catch { toast("写真を読み込めませんでした"); return; }
+  e.target.value = "";
+  menuMode = true;
+  pics = [{ blob }];
+  renderPics(); showForm();
+  readMenu();
+};
+async function readMenu() {
+  const menu = pics[0]; if (!menu) return;
+  $("reading").classList.remove("hidden"); $("aiNote").classList.add("hidden"); $("aiNote").classList.remove("err");
+  $("reRead").classList.add("hidden");
+  menuItems = []; renderMenu();
+  try {
+    const image = await blobToBase64(await picBlob(menu));
+    const { data, error } = await sb.functions.invoke("read-label", { body: { mode: "menu", images: [image], mediaType: "image/jpeg" } });
+    if (error) {
+      let msg = "メニューを読み取れませんでした。";
+      try { const j = await error.context.json(); if (j.error) msg = j.error + "。"; } catch {}
+      throw new Error(msg);
+    }
+    const r = data.result || {};
+    if (r.error) throw new Error(r.error + "。");
+    menuItems = (Array.isArray(r.items) ? r.items : []).filter(x => x && x.name);
+    menuItems.shop = r.shop || null;
+    if (!menuItems.length) throw new Error("メニューにお酒が見つかりませんでした。");
+    renderMenu();
+    const notes = [`メニューから${menuItems.length}種類読み取りました。飲んだお酒をタップしてください。`];
+    if (r.shop) notes.push(`お店：${r.shop}`);
+    $("aiNote").innerHTML = notes.map(esc).join("<br>");
+    $("aiNote").classList.remove("hidden");
+  } catch (err) {
+    $("aiNote").textContent = (err.message || "メニューを読み取れませんでした。") + "手で入力してください。";
+    $("aiNote").classList.add("err"); $("aiNote").classList.remove("hidden");
+  } finally {
+    $("reading").classList.add("hidden"); $("reRead").classList.remove("hidden");
+  }
+}
+function renderMenu(picked = -1) {
+  const box = $("menuList");
+  box.classList.toggle("hidden", !menuItems.length);
+  if (!menuItems.length) { box.innerHTML = ""; return; }
+  box.innerHTML = `<b>どれを飲みましたか？</b>` + menuItems.map((m, i) => {
+    const spec = [KIND[m.kind], m.sake_grade, m.region, m.price ? `${m.size ? m.size + " " : ""}${Number(m.price).toLocaleString()}円` : m.size].filter(Boolean).join(" · ");
+    return `<button type="button" class="cand${i === picked ? " on" : ""}" data-i="${i}"><strong>${esc(m.name)}</strong><span>${esc(spec)}</span></button>`;
+  }).join("");
+}
+$("menuList").onclick = e => {
+  const b = e.target.closest(".cand"); if (!b) return;
+  const m = menuItems[+b.dataset.i];
+  const f = F();
+  if (KIND[m.kind]) setKind(m.kind);
+  // 選び直しに備えて、AIが入れた欄（黄色）は入れ替える。自分で入力した欄は残す
+  const put = (k, v) => { const el = f[k]; if (el.value.trim() && !el.classList.contains("ai")) return; el.value = v ?? ""; el.classList.toggle("ai", v != null && v !== ""); };
+  put("name", m.name); put("sake_grade", m.sake_grade); put("producer", m.producer); put("region", m.region);
+  put("price", intOrNull(m.price));
+  if (menuItems.shop) put("place", menuItems.shop);
+  if (m.note && !f.memo.value.trim()) f.memo.placeholder = "メニューの説明：" + m.note;
+  $("aiMark").classList.remove("hidden");
+  renderMenu(+b.dataset.i);
+  $("aiNote").innerHTML = esc(`「${m.name}」を入れました。「ネットで詳しく調べる」で精米歩合や酒米なども入れられます。`);
+  $("aiNote").classList.remove("hidden", "err");
+};
 
 async function readLabel() {
   if (!pics.length) return;
@@ -400,7 +474,8 @@ $("candList").onclick = e => {
 
 async function labelImagesForWeb() {
   try {
-    const blobs = (await Promise.all(pics.slice(0, 2).map(picBlob))).filter(Boolean);
+    const src = menuMode ? pics.slice(1, 3) : pics.slice(0, 2); // メニューの写真は検索の邪魔になるので送らない
+    const blobs = (await Promise.all(src.map(picBlob))).filter(Boolean);
     return await Promise.all(blobs.map(async b => blobToBase64(await shrink(b, 768, 0.75))));
   } catch { return []; }
 }
