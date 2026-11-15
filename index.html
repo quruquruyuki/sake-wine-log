@@ -46,7 +46,20 @@ select.sort{border:1px solid var(--line);background:var(--card);border-radius:99
 .count{font-size:12px;color:var(--mu);letter-spacing:.1em;margin:0 0 10px}
 .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
 @media(min-width:560px){.grid{grid-template-columns:repeat(3,1fr)}}
-.item{border:none;padding:0;background:none;text-align:left;display:block}
+.item{border:none;padding:0;background:none;text-align:left;display:block;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;transition:transform .15s}
+.item img,.item .thumb{-webkit-touch-callout:none}
+.item.pressing{transform:scale(.96)}
+.asheet{position:fixed;inset:0;z-index:40;background:rgba(31,27,23,0);transition:background .18s;display:flex;align-items:flex-end;justify-content:center}
+.asheet.open{background:rgba(31,27,23,.35)}
+.apanel{width:100%;max-width:640px;background:var(--paper);border-radius:18px 18px 0 0;padding:10px 16px calc(env(safe-area-inset-bottom) + 14px);transform:translateY(100%);transition:transform .18s}
+.asheet.open .apanel{transform:none}
+.ahead{padding:10px 4px 12px;border-bottom:1px solid var(--line);margin-bottom:6px}
+.ahead strong{display:block;font-family:var(--serif);font-size:17px}
+.ahead span{font-size:12px;color:var(--mu)}
+.apanel button{display:block;width:100%;text-align:left;border:none;background:none;padding:15px 4px;font-size:16px;border-bottom:1px solid var(--line)}
+.apanel button.del{color:var(--wine)}
+.apanel button.del.armed{background:#f5dede;border-radius:10px;padding-left:12px;font-weight:600}
+.apanel button.cancel{border-bottom:none;text-align:center;color:var(--mu);margin-top:4px}
 .thumb{aspect-ratio:3/4;border-radius:10px;background:#e9e1d5 center/cover no-repeat;position:relative;overflow:hidden;box-shadow:0 1px 0 rgba(0,0,0,.04)}
 .thumb .ph{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-family:var(--serif);font-size:34px;color:#c9bca9}
 .tag{position:absolute;left:8px;top:8px;font-size:10px;letter-spacing:.12em;padding:3px 7px;border-radius:4px;color:#fff;background:var(--wine)}
@@ -356,6 +369,18 @@ select.sort{border:1px solid var(--line);background:var(--card);border-radius:99
     <button class="btn danger" id="detailDelete" type="button" style="margin-top:28px">この記録を削除</button>
   </div>
 </section>
+
+<!-- 一覧の長押しメニュー -->
+<div class="asheet hidden" id="actionSheet">
+  <div class="apanel">
+    <div class="ahead"><strong id="sheetTitle"></strong><span id="sheetSub"></span></div>
+    <button type="button" id="actOpen">詳細を見る</button>
+    <button type="button" id="actEdit">編集する</button>
+    <button type="button" id="actAgain">「また買いたい」に入れる</button>
+    <button type="button" id="actDelete" class="del">削除する</button>
+    <button type="button" id="actCancel" class="cancel">キャンセル</button>
+  </div>
+</div>
 
 <div class="toast" id="toast"></div>
 

@@ -174,7 +174,79 @@ function renderList() {
     </button>`;
   }).join("");
 }
-$("grid").onclick = e => { const b = e.target.closest(".item"); if (b) openDetail(drinks.find(d => d.id === b.dataset.id)); };
+$("grid").onclick = e => {
+  const b = e.target.closest(".item"); if (!b) return;
+  if (pressFired) { pressFired = false; return; } // 長押しの直後のタップは無視
+  openDetail(drinks.find(d => d.id === b.dataset.id));
+};
+
+/* ---------- 長押しメニュー ---------- */
+let pressTimer = null, pressStart = null, pressFired = false, sheetTarget = null, sheetOpenedAt = 0;
+const justOpened = () => Date.now() - sheetOpenedAt < 450; // 指を離したときのタップを無視する
+const grid = $("grid");
+grid.addEventListener("pointerdown", e => {
+  const b = e.target.closest(".item"); if (!b || e.button > 0) return;
+  pressFired = false; pressStart = [e.clientX, e.clientY];
+  b.classList.add("pressing");
+  clearTimeout(pressTimer);
+  pressTimer = setTimeout(() => {
+    pressFired = true; b.classList.remove("pressing");
+    if (navigator.vibrate) navigator.vibrate(10);
+    openSheet(drinks.find(d => d.id === b.dataset.id));
+  }, 500);
+});
+const cancelPress = () => { clearTimeout(pressTimer); grid.querySelectorAll(".pressing").forEach(x => x.classList.remove("pressing")); };
+grid.addEventListener("pointermove", e => { if (pressStart && Math.hypot(e.clientX - pressStart[0], e.clientY - pressStart[1]) > 10) cancelPress(); });
+["pointerup", "pointercancel", "pointerleave"].forEach(ev => grid.addEventListener(ev, cancelPress));
+grid.addEventListener("contextmenu", e => { // パソコンの右クリック、Androidの長押し
+  const b = e.target.closest(".item"); if (!b) return;
+  e.preventDefault(); cancelPress(); pressFired = true;
+  openSheet(drinks.find(d => d.id === b.dataset.id));
+});
+
+function openSheet(d) {
+  if (!d) return;
+  sheetTarget = d; sheetOpenedAt = Date.now();
+  $("sheetTitle").textContent = d.name;
+  $("sheetSub").textContent = [KIND[d.kind], fmtDate(d.drank_on)].filter(Boolean).join(" · ");
+  $("actAgain").textContent = d.buy_again ? "「また買いたい」を外す" : "「また買いたい」に入れる";
+  $("actDelete").textContent = "削除する"; $("actDelete").classList.remove("armed");
+  $("actionSheet").classList.remove("hidden");
+  requestAnimationFrame(() => $("actionSheet").classList.add("open"));
+}
+function closeSheet() {
+  $("actionSheet").classList.remove("open");
+  setTimeout(() => $("actionSheet").classList.add("hidden"), 180);
+  sheetTarget = null;
+  setTimeout(() => { pressFired = false; }, 300);
+}
+$("actionSheet").addEventListener("click", e => { if (justOpened()) { e.stopImmediatePropagation(); e.preventDefault(); } }, true);
+$("actionSheet").onclick = e => { if (e.target === $("actionSheet")) closeSheet(); };
+$("actCancel").onclick = closeSheet;
+$("actOpen").onclick = () => { const d = sheetTarget; closeSheet(); openDetail(d); };
+$("actEdit").onclick = () => { const d = sheetTarget; closeSheet(); openEdit(d); };
+$("actAgain").onclick = async () => {
+  const d = sheetTarget; closeSheet();
+  const { error } = await sb.from("drinks").update({ buy_again: !d.buy_again }).eq("id", d.id);
+  if (error) { toast("変更できませんでした"); return; }
+  toast(d.buy_again ? "「また買いたい」から外しました" : "「また買いたい」に入れました");
+  load();
+};
+$("actDelete").onclick = async () => {
+  const btn = $("actDelete");
+  if (!btn.classList.contains("armed")) { btn.classList.add("armed"); btn.textContent = "もう一度押すと削除（元に戻せません）"; return; }
+  const d = sheetTarget; closeSheet();
+  await deleteDrink(d);
+};
+
+async function deleteDrink(d) {
+  const { error } = await sb.from("drinks").delete().eq("id", d.id);
+  if (error) { toast("削除に失敗しました"); return false; }
+  removePhotos(d);
+  toast("削除しました");
+  load();
+  return true;
+}
 $("kindFilter").onclick = e => {
   const b = e.target.closest("button"); if (!b) return;
   filterKind = b.dataset.k;
@@ -628,12 +700,7 @@ $("detailClose").onclick = () => $("detail").classList.add("hidden");
 $("detailEdit").onclick = () => openEdit(current);
 $("detailDelete").onclick = async () => {
   if (!current || !confirm(`「${current.name}」の記録を削除します。元に戻せません。`)) return;
-  const { error } = await sb.from("drinks").delete().eq("id", current.id);
-  if (error) { toast("削除に失敗しました"); return; }
-  removePhotos(current);
-  $("detail").classList.add("hidden");
-  toast("削除しました");
-  load();
+  if (await deleteDrink(current)) $("detail").classList.add("hidden");
 };
 
 /* ---------- auth ---------- */
