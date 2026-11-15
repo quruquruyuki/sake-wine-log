@@ -117,19 +117,20 @@ Deno.serve(async (req) => {
   if (!apiKey) return json({ error: "ANTHROPIC_API_KEY が未設定です" }, 500);
 
   let drink: Record<string, unknown>;
-  let image: string | null = null;
+  let images: string[] = [];
   try {
     const body = await req.json();
     drink = body.drink ?? {};
-    if (typeof body.image === "string" && body.image.length > 100 && body.image.length < 2_000_000) image = body.image;
+    const raw = Array.isArray(body.images) ? body.images : [body.image];
+    images = raw.filter((x: unknown) => typeof x === "string" && x.length > 100 && x.length < 2_000_000).slice(0, 2);
   } catch { return json({ error: "リクエストが読めません" }, 400); }
   const allowed = ["kind", "name", "producer", "country", "region", "wine_color", "grape", "vintage", "sake_grade", "polish_ratio", "rice", "ingredient", "koji", "distillation", "beer_style", "abv"];
   drink = Object.fromEntries(Object.entries(drink).filter(([k, v]) => allowed.includes(k) && String(v ?? "").length < 200));
   if (!drink.name || String(drink.name).trim().length === 0) return json({ error: "銘柄名がありません" }, 400);
 
   const userContent: any[] = [];
-  if (image) userContent.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: image } });
-  userContent.push({ type: "text", text: (image ? "【ラベル写真を添付しています】\n" : "") + buildPrompt(drink) });
+  for (const data of images) userContent.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data } });
+  userContent.push({ type: "text", text: (images.length ? `【ラベル写真を${images.length}枚添付しています（表・裏）】\n` : "") + buildPrompt(drink) });
   const messages: any[] = [{ role: "user", content: userContent }];
   const seenUrls = new Set<string>();
   let data: any = null;

@@ -11,7 +11,8 @@ let photoUrls = {};          // 保存先パス -> 表示用URL
 let filterKind = "all";
 let editing = null;          // 編集中のレコード（新規は null）
 let current = null;          // 詳細表示中のレコード
-let photoBlob = null;        // 新しく撮った写真（縮小済み）
+let pics = [];               // 編集中の写真（先頭が表ラベル）。{ blob } か { photo_path, thumb_path }
+const MAX_PICS = 4;
 let aiRaw = null;
 let webRaw = null;           // ネット検索の結果
 let state = {};              // チップ・スケール・評価の値
@@ -91,7 +92,14 @@ async function uploadPhoto(blob) {
   photoUrls[path] = URL.createObjectURL(blob); photoUrls[thumb] = URL.createObjectURL(tblob);
   return { photo_path: path, thumb_path: thumb };
 }
-function removePhotos(d) { const ps = [d.photo_path, d.thumb_path].filter(Boolean); if (ps.length) sb.storage.from(BUCKET).remove(ps); }
+const allPics = d => [d.photo_path ? { photo_path: d.photo_path, thumb_path: d.thumb_path } : null, ...(d.extra_photos || [])].filter(Boolean);
+function removePaths(list) { const ps = list.flatMap(p => [p.photo_path, p.thumb_path]).filter(Boolean); if (ps.length) sb.storage.from(BUCKET).remove(ps); }
+function removePhotos(d) { removePaths(allPics(d)); }
+async function picBlob(p) {
+  if (p.blob) return p.blob;
+  await ensureUrls([p.photo_path]);
+  return await fetch(photoUrls[p.photo_path]).then(r => r.ok ? r.blob() : null).catch(() => null);
+}
 
 // サムネイルがない古い記録に、あとからサムネイルを作る
 let backfilling = false;
@@ -215,6 +223,7 @@ function fillForm(d, fromAi = false) {
     if (fromAi && !(k in d)) return;
     const v = d[k];
     if (fromAi && (v === null || v === undefined || v === "")) return;
+    if (fromAi && f[k].value.trim() && !f[k].classList.contains("ai")) return; // 自分で入力した欄は上書きしない
     f[k].value = v ?? "";
     f[k].classList.toggle("ai", fromAi);
   });
@@ -222,18 +231,18 @@ function fillForm(d, fromAi = false) {
   $("descWrap").classList.toggle("hidden", !f.description.value);
   [...CHIP_KEYS, ...SCALE_KEYS, "rating"].forEach(k => { if (!fromAi || d[k] != null) state[k] = d[k] ?? null; });
   if (KIND[d.kind]) setKind(d.kind);
-  if (d.abv != null && d.abv !== "") { const el = abvInput(); el.value = d.abv; el.classList.toggle("ai", fromAi); }
+  if (d.abv != null && d.abv !== "") { const el = abvInput(); if (!fromAi || !el.value.trim() || el.classList.contains("ai")) { el.value = d.abv; el.classList.toggle("ai", fromAi); } }
   CHIP_KEYS.forEach(paintChips); SCALE_KEYS.forEach(paintScale); paintRate();
 }
 document.querySelectorAll("#form input, #form textarea").forEach(el => el.addEventListener("input", () => el.classList.remove("ai")));
 
 /* ---------- add / edit ---------- */
 function resetEdit() {
-  photoBlob = null; aiRaw = null; state = {};
+  pics = []; aiRaw = null; state = {};
   $("form").reset();
   document.querySelectorAll("#form .ai").forEach(el => el.classList.remove("ai"));
   $("photo").value = "";
-  $("preview").removeAttribute("src");
+  renderPics();
   ["photoWrap", "reading", "aiNote", "form", "saveBar", "aiMark", "reRead", "webReading", "webNote", "descWrap", "srcList"].forEach(id => $(id).classList.add("hidden"));
   $("aiNote").classList.remove("err"); $("webNote").classList.remove("err");
   webRaw = null; $("webBtn").disabled = false;
@@ -253,13 +262,12 @@ function openAdd() {
 }
 async function openEdit(d) {
   editing = d; resetEdit();
-  if (d.photo_path) await ensureUrls([d.photo_path]);
+  pics = allPics(d).map(p => ({ ...p }));
+  await ensureUrls(pics.map(p => p.thumb_path || p.photo_path));
   $("editTitle").textContent = "編集";
   fillForm(d);
-  const url = d.photo_path && photoUrls[d.photo_path];
-  $("shotBox").classList.add("hidden");
-  $("photoWrap").classList.remove("hidden");
-  if (url) $("preview").src = url; else { $("photoWrap").classList.add("hidden"); $("shotBox").classList.remove("hidden"); }
+  renderPics();
+  if (pics.length) $("reRead").classList.remove("hidden");
   showForm();
   $("detail").classList.add("hidden");
   $("edit").classList.remove("hidden"); $("edit").scrollTop = 0;
@@ -267,26 +275,47 @@ async function openEdit(d) {
 $("fab").onclick = openAdd;
 $("editClose").onclick = () => { $("edit").classList.add("hidden"); if (editing) openDetail(editing); };
 $("manual").onclick = showForm;
-$("rePhoto").onclick = () => $("photo").click();
 $("reRead").onclick = () => readLabel();
 
-$("photo").onchange = async e => {
-  const file = e.target.files[0]; if (!file) return;
-  try { photoBlob = await shrink(file, 1024, 0.8); } catch { toast("写真を読み込めませんでした"); return; }
-  $("preview").src = URL.createObjectURL(photoBlob);
-  $("shotBox").classList.add("hidden"); $("photoWrap").classList.remove("hidden");
-  if (editing) { showForm(); $("reRead").classList.remove("hidden"); return; } // 編集中は写真の差し替えだけ
-  showForm();
-  readLabel();
+// 写真の並び（先頭＝表ラベル）。× で外す、＋ で裏ラベルなどを足す
+function renderPics() {
+  const has = pics.length > 0;
+  $("shotBox").classList.toggle("hidden", has);
+  $("photoWrap").classList.toggle("hidden", !has);
+  $("picStrip").innerHTML = pics.map((p, i) => {
+    const url = p.blob ? (p.url ||= URL.createObjectURL(p.blob)) : photoUrls[p.thumb_path || p.photo_path] || "";
+    return `<div class="pic"><img src="${url}" alt=""><span class="picTag">${i === 0 ? "表" : i === 1 ? "裏" : i + 1}</span><button type="button" class="picDel" data-i="${i}" aria-label="外す">×</button></div>`;
+  }).join("") + (pics.length < MAX_PICS ? `<label class="pic add">＋<small>${pics.length === 1 ? "裏ラベルを追加" : "写真を追加"}</small><input id="photoMore" type="file" accept="image/*"></label>` : `<input id="photoMore" type="file" accept="image/*" class="hidden">`);
+  $("photoMore").onchange = e => addPhoto(e.target.files[0], e.target);
+}
+$("picStrip").onclick = e => {
+  const b = e.target.closest(".picDel"); if (!b) return;
+  pics.splice(+b.dataset.i, 1);
+  renderPics();
+  if (!pics.length) $("reRead").classList.add("hidden");
 };
+async function addPhoto(file, input) {
+  if (!file) return;
+  let blob;
+  try { blob = await shrink(file, 1024, 0.8); } catch { toast("写真を読み込めませんでした"); return; }
+  if (input) input.value = "";
+  pics.push({ blob });
+  renderPics();
+  showForm();
+  if (editing) { $("reRead").classList.remove("hidden"); toast("「もう一度読み取る」で新しい写真も読ませられます"); return; }
+  readLabel(); // 新規のときは、写真を足すたびに全部の写真で読み直す
+}
+$("photo").onchange = e => addPhoto(e.target.files[0], e.target);
 
 async function readLabel() {
-  if (!photoBlob) return;
+  if (!pics.length) return;
   $("reading").classList.remove("hidden"); $("aiNote").classList.add("hidden"); $("aiNote").classList.remove("err");
   $("reRead").classList.add("hidden");
   try {
-    const image = await blobToBase64(photoBlob);
-    const { data, error } = await sb.functions.invoke("read-label", { body: { image, mediaType: "image/jpeg" } });
+    const blobs = (await Promise.all(pics.map(picBlob))).filter(Boolean);
+    const images = await Promise.all(blobs.map(blobToBase64));
+    if (!images.length) throw new Error("写真を読み込めませんでした。");
+    const { data, error } = await sb.functions.invoke("read-label", { body: { images, mediaType: "image/jpeg" } });
     if (error) {
       let msg = "読み取りに失敗しました。手で入力してください。";
       try { const j = await error.context.json(); if (j.error) msg = j.error + "。手で入力してください。"; } catch {}
@@ -369,16 +398,11 @@ $("candList").onclick = e => {
   toast("「" + c.name + "」の情報を入れました");
 };
 
-async function labelImageForWeb() {
+async function labelImagesForWeb() {
   try {
-    let blob = photoBlob;
-    if (!blob && editing?.photo_path) {
-      await ensureUrls([editing.photo_path]);
-      blob = await fetch(photoUrls[editing.photo_path]).then(r => r.ok ? r.blob() : null);
-    }
-    if (!blob) return null;
-    return await blobToBase64(await shrink(blob, 768, 0.75));
-  } catch { return null; }
+    const blobs = (await Promise.all(pics.slice(0, 2).map(picBlob))).filter(Boolean);
+    return await Promise.all(blobs.map(async b => blobToBase64(await shrink(b, 768, 0.75))));
+  } catch { return []; }
 }
 
 $("webBtn").onclick = async () => {
@@ -392,8 +416,8 @@ $("webBtn").onclick = async () => {
   $("webReading").classList.remove("hidden"); $("webNote").classList.add("hidden"); $("webNote").classList.remove("err");
   webCandidates = []; renderCandidates();
   try {
-    const image = await labelImageForWeb();
-    const { data, error } = await sb.functions.invoke("research-drink", { body: image ? { drink, image } : { drink } });
+    const images = await labelImagesForWeb();
+    const { data, error } = await sb.functions.invoke("research-drink", { body: { drink, images } });
     if (error) {
       let msg = "調べるのに失敗しました。";
       try { const j = await error.context.json(); if (j.error) msg = j.error + "。"; } catch {}
@@ -453,12 +477,19 @@ $("saveBtn").onclick = async () => {
       sources: state.sources?.length ? state.sources : null,
     };
     if (aiRaw) row.ai_raw = aiRaw;
-    if (photoBlob) Object.assign(row, await uploadPhoto(photoBlob));
+    // 新しい写真をアップロードし、並び順どおりに保存（先頭が一覧に出る写真）
+    const beforePics = editing ? allPics(editing) : []; // 保存前の写真（外した写真の削除用）
+    const finalPics = [];
+    for (const p of pics) finalPics.push(p.blob ? await uploadPhoto(p.blob) : { photo_path: p.photo_path, thumb_path: p.thumb_path });
+    row.photo_path = finalPics[0]?.photo_path ?? null;
+    row.thumb_path = finalPics[0]?.thumb_path ?? null;
+    row.extra_photos = finalPics.slice(1);
     let saved;
     if (editing) {
       const { data, error } = await sb.from("drinks").update(row).eq("id", editing.id).select().single();
       if (error) throw error;
-      if (photoBlob) removePhotos(editing);
+      const kept = new Set(finalPics.map(p => p.photo_path));
+      removePaths(beforePics.filter(p => !kept.has(p.photo_path))); // 外した写真を削除
       saved = data;
     } else {
       const { data, error } = await sb.from("drinks").insert(row).select().single();
@@ -480,11 +511,15 @@ $("saveBtn").onclick = async () => {
 function openDetail(d) {
   if (!d) return;
   current = d;
-  // まずサムネイルを出し、大きい写真は読み込めたら差し替える
-  const url = (d.photo_path && photoUrls[d.photo_path]) || (thumbOf(d) && photoUrls[thumbOf(d)]);
-  if (d.photo_path && !photoUrls[d.photo_path]) ensureUrls([d.photo_path]).then(() => {
-    const img = document.querySelector("#detailBody .dhero");
-    if (current === d && img && photoUrls[d.photo_path]) img.src = photoUrls[d.photo_path];
+  // まずサムネイル（なければ手元にあるURL）を出し、大きい写真は読み込めたら差し替える
+  const dpics = allPics(d);
+  const gallery = dpics.map((p, i) => {
+    const u = photoUrls[p.photo_path] || photoUrls[p.thumb_path] || "";
+    return `<img class="dhero" data-i="${i}" src="${u}" alt="">`;
+  }).join("");
+  if (dpics.length) ensureUrls(dpics.flatMap(p => [p.photo_path])).then(() => {
+    if (current !== d) return;
+    document.querySelectorAll("#detailBody .dhero").forEach(img => { const p = dpics[+img.dataset.i]; if (p && photoUrls[p.photo_path] && img.src !== photoUrls[p.photo_path]) img.src = photoUrls[p.photo_path]; });
   });
   const scaleTxt = (n, l, r) => n ? `${l} ${"●".repeat(n)}${"○".repeat(5 - n)} ${r}` : null;
   const L = LABELS[d.kind] || LABELS.wine;
@@ -503,7 +538,7 @@ function openDetail(d) {
   items.push(["飲んだ日", fmtDate(d.drank_on)], ["価格", d.price ? d.price.toLocaleString() + "円" : null], ["買った店", d.shop], ["飲んだ場所", d.place]);
   const sub = subline(d, false);
   $("detailBody").innerHTML = `
-    ${url ? `<img class="dhero" src="${url}" alt="">` : ""}
+    ${dpics.length ? `<div class="dgal${dpics.length > 1 ? " multi" : ""}">${gallery}</div>${dpics.length > 1 ? `<p class="dgalhint">横にスワイプで${dpics.length}枚</p>` : ""}` : ""}
     <span class="dkind ${d.kind}">${KIND[d.kind]}</span>${d.buy_again ? ` <span class="dkind" style="background:var(--gold)">また買いたい</span>` : ""}
     <h2 class="dname">${esc(d.name)}</h2>
     <p class="dsub">${esc(sub)}</p>

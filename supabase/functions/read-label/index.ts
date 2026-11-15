@@ -11,6 +11,7 @@ const CORS = {
 const MODEL = "claude-haiku-5-5";
 
 const PROMPT = `あなたはワイン・日本酒・焼酎・ビールのラベルを読むアシスタントです。
+写真が複数あるときは、すべて同じ1本のお酒の表ラベル・裏ラベルなどです。裏ラベルの原材料名・精米歩合・アルコール分・製造者・日本酒度などの表示も必ず読み取って、全部の写真の情報をまとめて1つの結果にしてください。
 写真のラベルから読み取れる情報を、次のJSONだけで返してください（前後に文章を付けない）。
 読めない・分からない項目は null にしてください。推測で埋めるのは sweetness・body・bitterness だけにし、それ以外はラベルに書かれていることか、銘柄から確実に分かることだけにします。
 
@@ -53,16 +54,17 @@ Deno.serve(async (req) => {
   const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
   if (!apiKey) return json({ error: "ANTHROPIC_API_KEY が未設定です" }, 500);
 
-  let image: string, mediaType: string;
+  let images: string[], mediaType: string;
   try {
     const body = await req.json();
-    image = body.image;
+    images = Array.isArray(body.images) ? body.images : [body.image];
     mediaType = body.mediaType ?? "image/jpeg";
   } catch {
     return json({ error: "リクエストが読めません" }, 400);
   }
-  if (typeof image !== "string" || image.length < 100) return json({ error: "画像がありません" }, 400);
-  if (image.length > 5_000_000) return json({ error: "画像が大きすぎます" }, 413);
+  images = images.filter((x) => typeof x === "string" && x.length >= 100).slice(0, 4);
+  if (!images.length) return json({ error: "画像がありません" }, 400);
+  if (images.some((x) => x.length > 5_000_000)) return json({ error: "画像が大きすぎます" }, 413);
   if (!["image/jpeg", "image/png", "image/webp"].includes(mediaType)) return json({ error: "画像形式が対応外です" }, 400);
 
   const res = await fetch("https://api.anthropic.com/v1/messages", {
@@ -78,8 +80,8 @@ Deno.serve(async (req) => {
       messages: [{
         role: "user",
         content: [
-          { type: "image", source: { type: "base64", media_type: mediaType, data: image } },
-          { type: "text", text: PROMPT },
+          ...images.map((data) => ({ type: "image", source: { type: "base64", media_type: mediaType, data } })),
+          { type: "text", text: (images.length > 1 ? `【同じお酒の写真が${images.length}枚あります】\n` : "") + PROMPT },
         ],
       }],
     }),
