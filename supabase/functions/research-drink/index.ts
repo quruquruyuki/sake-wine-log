@@ -56,6 +56,60 @@ ${known}
 }`;
 }
 
+// 結果を必ず決まった形で受け取るための入れ物（AIにこの形で記入させる）
+const str = { type: ["string", "null"] };
+const num = { type: ["number", "null"] };
+const RESULT_TOOL = {
+  name: "save_result",
+  description: "調べた結果を記録する",
+  input_schema: {
+    type: "object",
+    properties: {
+      kind: { type: ["string", "null"], enum: ["wine", "sake", "shochu", "beer", null] },
+      name: str, producer: str, country: str, region: str,
+      wine_color: { type: ["string", "null"], enum: ["red", "white", "rose", "sparkling", null] },
+      grape: str, vintage: num, sake_grade: str, polish_ratio: num, rice: str,
+      ingredient: str, koji: str, distillation: str, beer_style: str, abv: num,
+      sweetness: num, body: num, bitterness: num, description: str, note: str,
+      sources: { type: "array", items: { type: "object", properties: { url: { type: "string" }, title: { type: "string" } }, required: ["url"] } },
+      candidates: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            name: { type: "string" }, sake_grade: str, polish_ratio: num, rice: str, abv: num, grape: str, vintage: num,
+            ingredient: str, koji: str, beer_style: str, sweetness: num, body: num, bitterness: num, description: str,
+          },
+          required: ["name"],
+        },
+      },
+    },
+    required: ["name"],
+  },
+};
+
+// 文章の中からJSONを取り出す（```で囲まれていても、前後に文章があっても読む）
+function parseLoose(text: string): any | null {
+  const t = text.replace(/```(?:json)?/g, "");
+  const start = t.indexOf("{");
+  if (start < 0) return null;
+  for (let end = t.lastIndexOf("}"); end > start; end = t.lastIndexOf("}", end - 1)) {
+    const chunk = t.slice(start, end + 1).replace(/,\s*([}\]])/g, "$1");
+    try { return JSON.parse(chunk); } catch { /* 次の候補へ */ }
+  }
+  return null;
+}
+
+async function callClaude(apiKey: string, body: unknown) {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) { console.error("anthropic error", res.status, await res.text()); return { error: res.status }; }
+  return { data: await res.json() };
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
   if (req.method !== "POST") return json({ error: "POSTのみ" }, 405);
@@ -83,21 +137,14 @@ Deno.serve(async (req) => {
 
   // pause_turn のときは続きを依頼（最大3回）
   for (let i = 0; i < 3; i++) {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-      body: JSON.stringify({
-        model: MODEL,
-        max_tokens: 3500,
-        messages,
-        tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 5, user_location: { type: "approximate", country: "JP", timezone: "Asia/Tokyo" } }],
-      }),
+    const r = await callClaude(apiKey, {
+      model: MODEL,
+      max_tokens: 4000,
+      messages,
+      tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 5, user_location: { type: "approximate", country: "JP", timezone: "Asia/Tokyo" } }],
     });
-    if (!res.ok) {
-      console.error("anthropic error", res.status, await res.text());
-      return json({ error: `AIの呼び出しに失敗しました（${res.status}）` }, 502);
-    }
-    data = await res.json();
+    if (r.error) return json({ error: `AIの呼び出しに失敗しました（${r.error}）` }, 502);
+    data = r.data;
     searches += data.usage?.server_tool_use?.web_search_requests ?? 0;
     for (const block of data.content ?? []) {
       if (block.type === "web_search_tool_result" && Array.isArray(block.content)) {
@@ -108,11 +155,27 @@ Deno.serve(async (req) => {
     messages.push({ role: "assistant", content: data.content });
   }
 
-  const text: string = (data?.content ?? []).filter((c: any) => c.type === "text").map((c: any) => c.text).join("");
-  const m = text.match(/\{[\s\S]*\}/);
-  if (!m) return json({ error: "調べた結果を解釈できませんでした" }, 502);
-  let parsed: any;
-  try { parsed = JSON.parse(m[0]); } catch { return json({ error: "調べた結果を解釈できませんでした" }, 502); }
+  // 途中経過も含めて、AIが書いた文章をすべて集める
+  const allText = messages.slice(1).concat([{ content: data?.content ?? [] }])
+    .flatMap((m: any) => Array.isArray(m.content) ? m.content : [])
+    .filter((c: any) => c.type === "text").map((c: any) => c.text).join("\n");
+  let parsed: any = parseLoose(allText);
+
+  // うまく読めないときは、調べた内容を決まった形に書き直してもらう（検索なし・安い）
+  if (!parsed) {
+    console.error("parse failed; stop_reason=", data?.stop_reason, "text=", allText.slice(0, 1500));
+    if (!allText.trim()) return json({ error: "調べきれませんでした。もう一度試してください" }, 502);
+    const r2 = await callClaude(apiKey, {
+      model: MODEL,
+      max_tokens: 3000,
+      tools: [RESULT_TOOL],
+      tool_choice: { type: "tool", name: "save_result" },
+      messages: [{ role: "user", content: `次はお酒について調べたメモです。内容を save_result に記録してください。メモに書かれていないことは null にします。\n\n${allText.slice(0, 20000)}` }],
+    });
+    const use = r2.data?.content?.find((c: any) => c.type === "tool_use");
+    if (!use) return json({ error: "調べた結果を解釈できませんでした" }, 502);
+    parsed = use.input;
+  }
 
   // 実際の検索結果に出てきたURLだけを出典として残す
   const sources = Array.isArray(parsed.sources) ? parsed.sources : [];
