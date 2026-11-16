@@ -7,7 +7,29 @@ const CORS = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
-const MODEL = "claude-haiku-5-5";
+const DEFAULT_MODEL = "claude-haiku-5-5"; // 共通設定（sake-wine-log/research_model）が読めないときの予備
+
+// ── 全アプリ共通の設定（Supabase の app_settings テーブル）──
+// AIモデルや料金単価はここから読む。1分間は使い回す。読めないときは従来の値（Secret・既定値）を使う
+const SETTINGS_TTL = 60_000;
+let settingsCache: { at: number; map: Record<string, unknown> } | null = null;
+async function appSettings(app: string): Promise<Record<string, unknown>> {
+  if (settingsCache && Date.now() - settingsCache.at < SETTINGS_TTL) return settingsCache.map;
+  const map: Record<string, unknown> = {};
+  try {
+    const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+    const q = `select=app,key,value&app=in.${encodeURIComponent(`("global","${app}")`)}`;
+    const r = await fetch(`${Deno.env.get("SUPABASE_URL")}/rest/v1/app_settings?${q}`, { headers: { apikey: key, Authorization: `Bearer ${key}` } });
+    if (r.ok) for (const row of await r.json()) map[row.app === "global" ? `global.${row.key}` : row.key] = row.value;
+    else console.error("app_settings", r.status, await r.text());
+  } catch (e) { console.error("app_settings", e); }
+  settingsCache = { at: Date.now(), map };
+  return map;
+}
+async function setting(app: string, key: string, fallback: string): Promise<string> {
+  const v = (await appSettings(app))[key];
+  return typeof v === "string" && v.trim() ? v.trim() : fallback;
+}
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { ...CORS, "Content-Type": "application/json" } });
@@ -139,7 +161,7 @@ Deno.serve(async (req) => {
   // pause_turn のときは続きを依頼（最大3回）
   for (let i = 0; i < 3; i++) {
     const r = await callClaude(apiKey, {
-      model: MODEL,
+      model: await setting("sake-wine-log", "research_model", DEFAULT_MODEL),
       max_tokens: 4000,
       messages,
       tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 5, user_location: { type: "approximate", country: "JP", timezone: "Asia/Tokyo" } }],
@@ -167,7 +189,7 @@ Deno.serve(async (req) => {
     console.error("parse failed; stop_reason=", data?.stop_reason, "text=", allText.slice(0, 1500));
     if (!allText.trim()) return json({ error: "調べきれませんでした。もう一度試してください" }, 502);
     const r2 = await callClaude(apiKey, {
-      model: MODEL,
+      model: await setting("sake-wine-log", "research_model", DEFAULT_MODEL),
       max_tokens: 3000,
       tools: [RESULT_TOOL],
       tool_choice: { type: "tool", name: "save_result" },
