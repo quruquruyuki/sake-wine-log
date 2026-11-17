@@ -97,6 +97,9 @@ async function uploadPhoto(blob) {
 const allPics = d => [d.photo_path ? { photo_path: d.photo_path, thumb_path: d.thumb_path } : null, ...(d.extra_photos || [])].filter(Boolean);
 function removePaths(list) { const ps = list.flatMap(p => [p.photo_path, p.thumb_path]).filter(Boolean); if (ps.length) sb.storage.from(BUCKET).remove(ps); }
 function removePhotos(d) { removePaths(allPics(d)); }
+// AIに読ませる写真：撮ったばかりの写真は高解像度版（小さい文字まで読める）、保存済みの写真は保存版
+const AI_SIDE = 1568;
+async function picAiBlob(p) { return p.ai || picBlob(p); }
 async function picBlob(p) {
   if (p.blob) return p.blob;
   await ensureUrls([p.photo_path]);
@@ -376,9 +379,10 @@ $("picStrip").onclick = e => {
 async function addPhoto(file, input) {
   if (!file) return;
   let blob;
-  try { blob = await shrink(file, 1024, 0.8); } catch { toast("写真を読み込めませんでした"); return; }
+  let ai;
+  try { [blob, ai] = await Promise.all([shrink(file, 1024, 0.8), shrink(file, AI_SIDE, 0.85)]); } catch { toast("写真を読み込めませんでした"); return; }
   if (input) input.value = "";
-  pics.push({ blob });
+  pics.push({ blob, ai });
   renderPics();
   showForm();
   if (editing || menuMode) { $("reRead").classList.remove("hidden"); if (editing) toast("「もう一度読み取る」で新しい写真も読ませられます"); return; }
@@ -390,10 +394,11 @@ $("photo").onchange = e => addPhoto(e.target.files[0], e.target);
 $("menuPhoto").onchange = async e => {
   const file = e.target.files[0]; if (!file) return;
   let blob;
-  try { blob = await shrink(file, 1400, 0.8); } catch { toast("写真を読み込めませんでした"); return; }
+  let ai;
+  try { [blob, ai] = await Promise.all([shrink(file, 1400, 0.8), shrink(file, AI_SIDE, 0.85)]); } catch { toast("写真を読み込めませんでした"); return; }
   e.target.value = "";
   menuMode = true;
-  pics = [{ blob }];
+  pics = [{ blob, ai }];
   renderPics(); showForm();
   readMenu();
 };
@@ -403,7 +408,7 @@ async function readMenu() {
   $("reRead").classList.add("hidden");
   menuItems = []; renderMenu();
   try {
-    const image = await blobToBase64(await picBlob(menu));
+    const image = await blobToBase64(await picAiBlob(menu));
     const { data, error } = await sb.functions.invoke("read-label", { body: { mode: "menu", images: [image], mediaType: "image/jpeg" } });
     if (error) {
       let msg = "メニューを読み取れませんでした。";
@@ -458,7 +463,7 @@ async function readLabel() {
   $("reading").classList.remove("hidden"); $("aiNote").classList.add("hidden"); $("aiNote").classList.remove("err");
   $("reRead").classList.add("hidden");
   try {
-    const blobs = (await Promise.all(pics.map(picBlob))).filter(Boolean);
+    const blobs = (await Promise.all(pics.map(picAiBlob))).filter(Boolean);
     const images = await Promise.all(blobs.map(blobToBase64));
     if (!images.length) throw new Error("写真を読み込めませんでした。");
     const { data, error } = await sb.functions.invoke("read-label", { body: { images, mediaType: "image/jpeg" } });
